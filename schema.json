@@ -1,0 +1,18 @@
+{
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "table":             { "type": "string" },
+      "field":             { "type": "string" },
+      "datatype":          { "type": ["string", "null"] },
+      "description":       { "type": ["string", "null"] },
+      "constraints":       { "type": ["string", "null"] },
+      "source_system":     { "type": ["string", "null"] },
+      "mapping":           { "type": ["string", "null"] },
+      "refresh_frequency": { "type": ["string", "null"] }
+    },
+    "required": ["table", "field"],
+    "additionalProperties": false
+  }
+}
