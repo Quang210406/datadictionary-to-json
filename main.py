@@ -3,14 +3,16 @@ import pandas as pd
 from dotenv import load_dotenv
 from google import genai
 
+# Load GEMINI_API_KEY from the .env file into the environment.
 load_dotenv()
 
 # Turn one sheet of Exel file to plain text for Ai agent to read
-def excel_to_text(path, sheet_name=0) -> str:
+def excel_to_text(path: str, sheet_name=0) -> str:
     df = pd.read_excel(path, sheet_name=sheet_name, header=None)
     df = df.dropna(how="all")                 
     return df.to_csv(index=False, header=False)
 
+# Sends dictionary text to AI agent
 def convert(text, schema) -> list:
     prompt = f"""You are a data restructuring tool. Convert the data dictionary
 below into a JSON array conforming exactly to this JSON Schema:
