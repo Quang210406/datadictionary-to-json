@@ -3,16 +3,25 @@
   "items": {
     "type": "object",
     "properties": {
-      "table":             { "type": "string" },
-      "field":             { "type": "string" },
-      "datatype":          { "type": ["string", "null"] },
-      "description":       { "type": ["string", "null"] },
-      "constraints":       { "type": ["string", "null"] },
-      "source_system":     { "type": ["string", "null"] },
-      "mapping":           { "type": ["string", "null"] },
-      "refresh_frequency": { "type": ["string", "null"] }
+      "description": { "type": ["string", "null"] },
+      "lineage": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "stage":        { "type": "string",
+                              "enum": ["source_onprem", "staging", "dwh", "cloud"] },
+            "table":        { "type": ["string", "null"] },
+            "column":       { "type": ["string", "null"] },
+            "doc_link":     { "type": ["string", "null"] },
+            "offline_path": { "type": ["string", "null"] }
+          },
+          "required": ["stage", "table", "column"],
+          "additionalProperties": false
+        }
+      }
     },
-    "required": ["table", "field"],
+    "required": ["lineage"],
     "additionalProperties": false
   }
 }
