@@ -1,0 +1,9 @@
+{
+  "errors": [],
+  "metrics": {
+    "record_completeness": "5/5",
+    "schema_clean_records": "5/5",
+    "fidelity_verified": "34/34",
+    "output_null_count": 15
+  }
+}
