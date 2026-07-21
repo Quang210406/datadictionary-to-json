@@ -1,82 +1,146 @@
 [
   {
-    "table": "REWARD_CATALOG",
-    "field": "REWARD_ID",
-    "datatype": "BIGINT",
-    "description": "Unique reward identifier",
-    "constraints": null,
-    "source_system": "LOYALTY_CORE",
-    "mapping": null,
-    "refresh_frequency": "Daily"
+    "description": "Mã định danh bài hát",
+    "lineage": [
+      {
+        "stage": "source_onprem",
+        "table": "SRC_SONGS",
+        "column": "SONG_ID",
+        "doc_link": "https://files.example.com/docs/src_songs.xlsx",
+        "offline_path": "../Archive/src_songs.xlsx"
+      },
+      {
+        "stage": "staging",
+        "table": "STG_SONGS",
+        "column": "SONG_ID",
+        "doc_link": "https://files.example.com/docs/stg_songs.xlsx",
+        "offline_path": null
+      },
+      {
+        "stage": "dwh",
+        "table": "DWH_SONGS",
+        "column": "SONG_ID",
+        "doc_link": "https://files.example.com/docs/dwh_songs.xlsx",
+        "offline_path": null
+      },
+      {
+        "stage": "cloud",
+        "table": "CLD_SONGS",
+        "column": "SONG_ID",
+        "doc_link": "https://files.example.com/docs/cld_songs.xlsx",
+        "offline_path": null
+      }
+    ]
   },
   {
-    "table": "REWARD_CATALOG",
-    "field": "REWARD_NAME",
-    "datatype": "NVARCHAR(200)",
-    "description": "Display name of the reward (Vietnamese)",
-    "constraints": null,
-    "source_system": "LOYALTY_CORE",
-    "mapping": null,
-    "refresh_frequency": "Daily"
+    "description": "Ngày phát hành",
+    "lineage": [
+      {
+        "stage": "source_onprem",
+        "table": "SRC_SONGS",
+        "column": "REL_DT",
+        "doc_link": "https://files.example.com/docs/src_songs.xlsx",
+        "offline_path": "../Archive/src_songs.xlsx"
+      },
+      {
+        "stage": "staging",
+        "table": "STG_SONGS",
+        "column": "REL_DT",
+        "doc_link": "https://files.example.com/docs/stg_songs.xlsx",
+        "offline_path": null
+      },
+      {
+        "stage": "dwh",
+        "table": "DWH_SONGS",
+        "column": "RELEASE_DATE_KEY",
+        "doc_link": "https://files.example.com/docs/dwh_songs.xlsx",
+        "offline_path": null
+      },
+      {
+        "stage": "cloud",
+        "table": "CLD_SONGS",
+        "column": "RELEASE_DATE_KEY",
+        "doc_link": "https://files.example.com/docs/cld_songs.xlsx",
+        "offline_path": null
+      }
+    ]
   },
   {
-    "table": "REWARD_CATALOG",
-    "field": "POINTS_COST",
-    "datatype": "DECIMAL(18,2)",
-    "description": "Points required to redeem",
-    "constraints": null,
-    "source_system": "LOYALTY_CORE",
-    "mapping": null,
-    "refresh_frequency": "Daily"
-  },
-  {
-    "table": "REWARD_CATALOG",
-    "field": "PARTNER_CODE",
-    "datatype": "VARCHAR(20)",
-    "description": "Partner merchant code",
-    "constraints": null,
-    "source_system": "PARTNER_HUB",
-    "mapping": null,
-    "refresh_frequency": null
-  },
-  {
-    "table": "REWARD_REDEMPTION",
-    "field": "REDEMPTION_ID",
-    "datatype": "BIGINT",
-    "description": "Unique redemption identifier",
-    "constraints": null,
-    "source_system": "LOYALTY_CORE",
-    "mapping": null,
-    "refresh_frequency": "Hourly"
-  },
-  {
-    "table": "REWARD_REDEMPTION",
-    "field": "REWARD_ID",
-    "datatype": "BIGINT",
-    "description": "FK to REWARD_CATALOG",
-    "constraints": null,
-    "source_system": "LOYALTY_CORE",
-    "mapping": null,
-    "refresh_frequency": "Hourly"
-  },
-  {
-    "table": "REWARD_REDEMPTION",
-    "field": "MEMBER_ID",
-    "datatype": "BIGINT",
-    "description": "FK to LOY_MEMBER_MST",
-    "constraints": null,
-    "source_system": "LOYALTY_CORE",
-    "mapping": null,
-    "refresh_frequency": "Hourly"
-  },
-  {
-    "table": "REWARD_REDEMPTION",
-    "field": "REDEEM_TS",
-    "datatype": "TIMESTAMP",
     "description": null,
-    "constraints": null,
-    "source_system": "LOYALTY_CORE",
-    "mapping": null,
-    "refresh_frequency": "Hourly"
+    "lineage": [
+      {
+        "stage": "source_onprem",
+        "table": "SRC_ARTISTS",
+        "column": "GENRE_CD",
+        "doc_link": "https://files.example.com/docs/src_artists.xlsx",
+        "offline_path": "../Archive/src_artists.xlsx"
+      },
+      {
+        "stage": "staging",
+        "table": "STG_ARTISTS",
+        "column": "GENRE_CD",
+        "doc_link": "https://files.example.com/docs/stg_artists.xlsx",
+        "offline_path": null
+      },
+      {
+        "stage": "dwh",
+        "table": "DWH_ARTISTS",
+        "column": "GENRE_CD",
+        "doc_link": "https://files.example.com/docs/dwh_artists.xlsx",
+        "offline_path": null
+      }
+    ]
+  },
+  {
+    "description": "Ngày ra mắt nghệ sĩ",
+    "lineage": [
+      {
+        "stage": "source_onprem",
+        "table": "SRC_ARTISTS",
+        "column": "DEBUT_DT",
+        "doc_link": "https://files.example.com/docs/src_artists.xlsx",
+        "offline_path": null
+      },
+      {
+        "stage": "staging",
+        "table": "STG_ARTISTS",
+        "column": "DEBUT_DT",
+        "doc_link": null,
+        "offline_path": null
+      },
+      {
+        "stage": "dwh",
+        "table": "DWH_ARTISTS",
+        "column": "DEBUT_DT",
+        "doc_link": "https://files.example.com/docs/dwh_artists.xlsx",
+        "offline_path": null
+      },
+      {
+        "stage": "cloud",
+        "table": "CLD_ARTISTS",
+        "column": "DEBUT_DT",
+        "doc_link": "https://files.example.com/docs/cld_artists.xlsx",
+        "offline_path": null
+      }
+    ]
+  },
+  {
+    "description": "Mã danh sách phát",
+    "lineage": [
+      {
+        "stage": "source_onprem",
+        "table": "SRC_PLAYLISTS",
+        "column": "PL_ID",
+        "doc_link": "https://files.example.com/docs/src_playlists.xlsx",
+        "offline_path": "../Archive/src_playlists.xlsx"
+      },
+      {
+        "stage": "staging",
+        "table": "STG_PLAYLISTS",
+        "column": "PL_ID",
+        "doc_link": "https://files.example.com/docs/stg_playlists.xlsx",
+        "offline_path": null
+      }
+    ]
   }
 ]
