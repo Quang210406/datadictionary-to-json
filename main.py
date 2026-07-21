@@ -113,13 +113,13 @@ def main():
             print(f"  - {e}")
         sys.exit(1)
 
-    # Assumption: a proper data dictionary has 3 columns
+    # subtract the 3 header rows (environment, stage, column names)
     expected_count = len(df) - 3
 
     schema = json.load(open("schema.json"))
-    result = convert(df_to_text(df), schema)
-
-    errors = validate_output(result, expected_count, schema)
+    text = df_to_text(df)                      
+    result = convert(text, schema)
+    errors = validate_output(result, expected_count, schema, text)
     if errors:
         print("Output validation failed:")
         for e in errors:
