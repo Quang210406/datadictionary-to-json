@@ -16,7 +16,7 @@ def validate_input(df) -> list:
         )
     return errors
 
-# shape — also track which records have at least one violation
+# shape, also track which records have at least one violation
 def _check_shape(result, schema):
     errors = []
     validator = jsonschema.Draft202012Validator(schema)

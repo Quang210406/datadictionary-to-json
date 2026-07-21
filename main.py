@@ -23,7 +23,7 @@ def main():
     report = validate_output(result, expected_count, schema, text)
 
     # Metrics print on every run — success or failure — so a failed run
-    # still tells us HOW far off the output was.
+    # tells us how far off the output was.
     print("Accuracy metrics:")
     for name, value in report["metrics"].items():
         print(f"  {name}: {value}")
