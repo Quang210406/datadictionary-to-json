@@ -18,4 +18,4 @@ using an AI agent constrained by a predefined JSON Schema.
 
 Verified on the sample: 8/8 records converted, blank table-name cells
 correctly carried down, deliberately-missing values preserved as null.
-## Architecture ![architecture](architecturev2.png)
+## Architecture ![architecture](Architecturev2.png)
