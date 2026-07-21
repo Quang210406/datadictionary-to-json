@@ -3,8 +3,6 @@ from dotenv import load_dotenv
 from google import genai
 
 # Load GEMINI_API_KEY from the .env file into the environment.
-# Lives here (not main.py) because this module is the only consumer of
-# the key — anything importing convert() gets a working setup for free.
 load_dotenv()
 
 # Sends dictionary text to AI agent
