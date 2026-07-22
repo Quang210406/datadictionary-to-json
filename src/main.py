@@ -1,8 +1,8 @@
 import sys, json
 
-from extract import read_excel_df, df_to_text
-from validate import validate_input, validate_output
-from agent import convert
+from src.extract import read_excel_df, df_to_text
+from src.validate import validate_input, validate_output
+from src.agent import convert
 
 def main():
     df = read_excel_df(sys.argv[1])
