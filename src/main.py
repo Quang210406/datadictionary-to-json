@@ -47,6 +47,32 @@ def print_block(title, mapping):
         print(f"  {name}: {value}")
 
 
+def finish(records, report, args, emitter, extra_blocks=()):
+    """Report, print and write — identical for every mode.
+
+    Only the spreadsheet layout and the mode-specific block of numbers differ,
+    so both arrive as arguments rather than as a second copy of this code.
+    """
+    print_block("Coverage (what a reviewer should look at):", report["coverage"])
+    for title, mapping in extra_blocks:
+        print_block(title, mapping)
+
+    print(f"\nFiles read: {report['files_read']} "
+          f"({report['files_converted']} converted, rest cached)")
+    errors = report.get("source_errors", [])
+    if errors:
+        print(f"Extraction problems: {len(errors)}")
+        for error in errors[:10]:
+            print(f"  - {error}")
+
+    Path(args.report).write_text(json.dumps(report, indent=2, ensure_ascii=False),
+                                 encoding="utf-8")
+    Path(args.out).write_text(json.dumps(records, indent=2, ensure_ascii=False),
+                              encoding="utf-8")
+    emitter(records, args.xlsx)
+    print(f"\nWrote {len(records)} records -> {args.out}, {args.xlsx}, {args.report}")
+
+
 def build_views(args):
     """Lineage from CREATE VIEW scripts: one file per view, two stages."""
     root = Path(args.sql)
@@ -73,21 +99,8 @@ def build_views(args):
         "views_chained_to_origin": chained,
         "source_errors": source_errors,
     }
-    print_block("Coverage:", report["coverage"])
-    print(f"\nRecords resolved through another view: {chained}")
-    print(f"Files read: {report['files_read']} "
-          f"({report['files_converted']} converted, rest cached)")
-    if source_errors:
-        print(f"Extraction problems: {len(source_errors)}")
-        for e in source_errors[:10]:
-            print(f"  - {e}")
-
-    Path(args.report).write_text(json.dumps(report, indent=2, ensure_ascii=False),
-                                 encoding="utf-8")
-    Path(args.out).write_text(json.dumps(records, indent=2, ensure_ascii=False),
-                              encoding="utf-8")
-    emit.write_view_workbook(records, args.xlsx)
-    print(f"\nWrote {len(records)} records -> {args.out}, {args.xlsx}, {args.report}")
+    finish(records, report, args, emit.write_view_workbook,
+           [("View chaining:", {"resolved_through_another_view": chained})])
 
 
 def main():
@@ -136,26 +149,12 @@ def main():
         "source_errors": source_errors,
     }
 
-    print_block("Coverage (what a reviewer should look at):", report["coverage"])
     chain = report["chain_diagnostics"]
-    print_block("Chain diagnostics:", {
-        "complete_chains": f"{chain['complete_chains']}/{chain['chains']}",
-        "unmatched_tails": chain["unmatched_tails"]["count"],
-        "unmatched_heads": chain["unmatched_heads"]["count"]})
-    print(f"\nFiles read: {report['files_read']} "
-          f"({report['files_converted']} converted, rest cached)")
-    if source_errors:
-        print(f"Extraction problems: {len(source_errors)}")
-        for e in source_errors[:10]:
-            print(f"  - {e}")
-
-    Path(args.report).write_text(json.dumps(report, indent=2, ensure_ascii=False),
-                                 encoding="utf-8")
-    Path(args.out).write_text(json.dumps(records, indent=2, ensure_ascii=False),
-                              encoding="utf-8")
-    emit.write_workbook(records, args.xlsx)
-    print(f"\nWrote {len(records)} records -> {args.out}, {args.xlsx}, {args.report}")
-
+    finish(records, report, args, emit.write_workbook,
+           [("Chain diagnostics:", {
+               "complete_chains": f"{chain['complete_chains']}/{chain['chains']}",
+               "unmatched_tails": chain["unmatched_tails"]["count"],
+               "unmatched_heads": chain["unmatched_heads"]["count"]})])
 
 if __name__ == "__main__":
     main()
