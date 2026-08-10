@@ -1,0 +1,17 @@
+{
+  "$comment": "One record per row of a per-table sheet in the DWH->CLOUD reference workbook.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "table":       { "type": ["string", "null"] },
+      "column":      { "type": "string" },
+      "datatype":    { "type": ["string", "null"] },
+      "size":        { "type": ["string", "null"] },
+      "nullable":    { "type": ["string", "null"] },
+      "description": { "type": ["string", "null"] }
+    },
+    "required": ["table", "column", "datatype", "size", "nullable", "description"],
+    "additionalProperties": false
+  }
+}

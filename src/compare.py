@@ -1,0 +1,266 @@
+"""Score the program's output against the hand-built dictionary.
+
+The manual sheet is ground truth: a human read the files and wrote down what
+they mean. This turns "does it work?" into a number per column, so a reviewer
+can see exactly which parts are trustworthy and which are not.
+
+Rows are matched on the DWH field plus its immediate source field, because
+that pair is what identifies a mapping — including under n-1, where several
+rows share one target.
+
+    python src/compare.py real_data-4.xlsx output.json
+"""
+
+import json
+import re
+import sys
+import unicodedata
+from collections import Counter
+
+import pandas as pd
+
+from assemble import field_key
+
+STAGE_OFFSET = {"source": 0, "staging": 5, "dwh": 10, "cloud": 15}
+FIELDS = ["table", "column", "path", "datatype", "size"]
+HEADER_ROW = 2  # 0-based row holding "Tên Bảng", "Tên Cột", ...
+
+
+def _clean(value):
+    """Trim, and fold Unicode to one form.
+
+    macOS stores filenames decomposed (NFD) while text typed into a cell is
+    composed (NFC), so the same Vietnamese path compares unequal byte-wise
+    unless both sides are normalised.
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    return unicodedata.normalize("NFC", str(value)).strip()
+
+
+def read_manual(path) -> dict:
+    df = pd.read_excel(path, header=None)
+    rows = {}
+    for i in range(HEADER_ROW + 1, len(df)):
+        row = {}
+        for stage, off in STAGE_OFFSET.items():
+            for k, name in enumerate(FIELDS):
+                row[f"{stage}_{name}"] = _clean(df.iloc[i, off + k])
+        row["description"] = _clean(df.iloc[i, 20])
+        row["logic"] = _clean(df.iloc[i, 22])
+        if not row["dwh_column"]:
+            continue
+        key = (field_key(row["dwh_table"], row["dwh_column"]),
+               field_key(row["staging_table"], row["staging_column"]))
+        rows.setdefault(key, row)
+    return rows
+
+
+def read_output(path) -> dict:
+    records = json.loads(open(path, encoding="utf-8").read())
+    rows = {}
+    for record in records:
+        by_stage = {e["stage"]: e for e in record["lineage"]}
+        row = {}
+        for stage in STAGE_OFFSET:
+            entry = by_stage.get(stage)
+            for name in FIELDS:
+                src = {"path": "offline_path"}.get(name, name)
+                row[f"{stage}_{name}"] = _clean(entry.get(src)) if entry else ""
+        row["description"] = _clean(record.get("description"))
+        logic = ""
+        for entry in record["lineage"]:
+            for source in entry["sources"]:
+                logic = _clean(source.get("transformation_logic")) or logic
+        row["logic"] = logic
+        key = (field_key(row["dwh_table"], row["dwh_column"]),
+               field_key(row["staging_table"], row["staging_column"]))
+        rows.setdefault(key, row)
+    return rows
+
+
+def compare(manual_path, output_path) -> dict:
+    manual, produced = read_manual(manual_path), read_output(output_path)
+    matched = sorted(set(manual) & set(produced),
+                     key=lambda k: (str(k[0]), str(k[1])))
+    only_manual = sorted(set(manual) - set(produced), key=str)
+    only_output = sorted(set(produced) - set(manual), key=str)
+
+    columns = [f"{s}_{f}" for s in STAGE_OFFSET for f in FIELDS] + ["description", "logic"]
+    agree, compared = Counter(), Counter()
+    mismatches = []
+    for key in matched:
+        for col in columns:
+            a, b = manual[key][col], produced[key][col]
+            if not a and not b:
+                continue  # both blank: agreement about absence, not a value
+            compared[col] += 1
+            # Paths and prose are compared loosely: one is a citation the
+            # human typed, the other is the file the program opened.
+            same = (a == b) or (col.endswith("_path") and a.split("/")[-1] == b.split("/")[-1])
+            if not same and col in ("description", "logic"):
+                same = a[:40] == b[:40]
+            if same:
+                agree[col] += 1
+            elif len(mismatches) < 40:
+                mismatches.append({"row": f"{key[0]} <- {key[1]}", "column": col,
+                                   "manual": a[:60], "program": b[:60]})
+
+    total_c, total_a = sum(compared.values()), sum(agree.values())
+    return {
+        "manual_rows": len(manual), "program_rows": len(produced),
+        "matched_rows": len(matched),
+        "rows_only_in_manual": [f"{a} <- {b}" for a, b in only_manual][:10],
+        "rows_only_in_program": len(only_output),
+        "overall_field_accuracy": f"{total_a}/{total_c}"
+                                  f" ({total_a / total_c:.1%})" if total_c else "n/a",
+        "by_column": {c: f"{agree[c]}/{compared[c]} ({agree[c] / compared[c]:.0%})"
+                      for c in columns if compared[c]},
+        "mismatches": mismatches,
+    }
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if len(args) < 2:
+        print(__doc__); sys.exit(2)
+    views = "--views" in sys.argv
+    result = (compare_views if views else compare)(args[0], args[1])
+    print(f"manual rows: {result['manual_rows']} | program rows: "
+          f"{result['program_rows']} | matched: {result['matched_rows']}")
+    print(f"\nOVERALL FIELD ACCURACY: {result['overall_field_accuracy']}\n")
+    for col, score in result["by_column"].items():
+        print(f"  {col:22} {score}")
+    if result["rows_only_in_manual"]:
+        print("\nIn your sheet but not produced:")
+        for r in result["rows_only_in_manual"]:
+            print(f"  - {r}")
+    if result["mismatches"]:
+        print(f"\nField mismatches ({len(result['mismatches'])} shown):")
+        for m in result["mismatches"][:15]:
+            print(f"  {m['row']}\n     {m['column']}: manual={m['manual']!r} "
+                  f"program={m['program']!r}")
+    json.dump(result, open("compare.json", "w"), indent=2, ensure_ascii=False)
+    print("\nWrote compare.json")
+
+
+
+
+# ------------------------------------------------- SQL view ground truth
+#
+# The manual SQL sheet is flat: one header row, one row per (view column,
+# source field). Rows match on that pair, so n-1 columns line up correctly.
+#
+# Table and column names compare case-insensitively: the agent is told to copy
+# verbatim, so it emits `address` where the SQL writes `address`, while a
+# person writing the sheet by hand naturally types `ADDRESS`. Both are the
+# same identifier and neither is wrong.
+
+VIEW_HEADERS = {"source_schema": "Source Schema", "source_table": "Source Table",
+                "source_column": "Source Column", "view_name": "View Name",
+                "view_column": "View Column", "role": "Role",
+                "transformation": "Transformation", "path": "Đường dẫn"}
+VIEW_COMPARED = ["source_schema", "source_table", "source_column", "role",
+                 "transformation", "path"]
+CASELESS = {"source_schema", "source_table", "source_column", "role"}
+
+
+def _squash(text):
+    """An expression reduced to its tokens.
+
+    Collapses runs of whitespace and drops spacing around brackets and commas,
+    so `COALESCE( (SELECT x` and `COALESCE((SELECT x` compare equal. Nothing
+    else is forgiven: different tokens, different order or different literals
+    still count as a mismatch.
+    """
+    squashed = " ".join(text.split()).lower()
+    return re.sub(r"\s*([(),])\s*", r"\1", squashed)
+
+
+def _view_key(row):
+    return (field_key(row["view_name"], row["view_column"]),
+            field_key(row["source_table"], row["source_column"]))
+
+
+def read_manual_views(path) -> dict:
+    df = pd.read_excel(path)
+    lookup = {}
+    for field, header in VIEW_HEADERS.items():
+        for col in df.columns:
+            if _clean(col).lower().lstrip("s") == _clean(header).lower().lstrip("s"):
+                lookup[field] = col
+                break
+    rows = {}
+    for _, r in df.iterrows():
+        row = {f: _clean(r[c]) if c in df.columns else "" for f, c in lookup.items()}
+        if not row.get("view_column"):
+            continue
+        rows.setdefault(_view_key(row), row)
+    return rows
+
+
+def read_output_views(path) -> dict:
+    records = json.loads(open(path, encoding="utf-8").read())
+    rows = {}
+    for record in records:
+        by_stage = {e["stage"]: e for e in record["lineage"]}
+        view = by_stage.get("view")
+        if not view:
+            continue
+        source = (view.get("sources") or [{}])[0]
+        row = {
+            "source_schema": _clean(source.get("schema")),
+            "source_table": _clean(source.get("table")),
+            "source_column": _clean(source.get("column")),
+            "view_name": _clean(view.get("table")),
+            "view_column": _clean(view.get("column")),
+            "role": _clean(source.get("role")),
+            "transformation": _clean(source.get("transformation_logic")),
+            "path": _clean(view.get("offline_path")),
+        }
+        rows.setdefault(_view_key(row), row)
+    return rows
+
+
+def compare_views(manual_path, output_path) -> dict:
+    manual, produced = read_manual_views(manual_path), read_output_views(output_path)
+    matched = sorted(set(manual) & set(produced), key=str)
+    agree, compared = Counter(), Counter()
+    mismatches = []
+    for key in matched:
+        for col in VIEW_COMPARED:
+            a, b = manual[key].get(col, ""), produced[key].get(col, "")
+            if not a and not b:
+                continue
+            compared[col] += 1
+            same = a == b
+            if not same and col in CASELESS:
+                same = a.upper() == b.upper()
+            if not same and col == "path":
+                same = a.split("/")[-1] == b.split("/")[-1]
+            if not same and col == "transformation":
+                # SQL whitespace is not meaningful and a person transcribing an
+                # expression into a cell will not reproduce its line breaks, so
+                # compare the tokens rather than the formatting.
+                same = _squash(a) == _squash(b)
+            if same:
+                agree[col] += 1
+            elif len(mismatches) < 40:
+                mismatches.append({"row": f"{key[0]} <- {key[1]}", "column": col,
+                                   "manual": a[:70], "program": b[:70]})
+    total_c, total_a = sum(compared.values()), sum(agree.values())
+    return {
+        "manual_rows": len(manual), "program_rows": len(produced),
+        "matched_rows": len(matched),
+        "rows_only_in_manual": [f"{a} <- {b}" for a, b in
+                                sorted(set(manual) - set(produced), key=str)][:10],
+        "rows_only_in_program": len(set(produced) - set(manual)),
+        "overall_field_accuracy": (f"{total_a}/{total_c} ({total_a/total_c:.1%})"
+                                   if total_c else "n/a"),
+        "by_column": {c: f"{agree[c]}/{compared[c]} ({agree[c]/compared[c]:.0%})"
+                      for c in VIEW_COMPARED if compared[c]},
+        "mismatches": mismatches,
+    }
+
+if __name__ == "__main__":
+    main()

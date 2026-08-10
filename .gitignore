@@ -1,4 +1,42 @@
+# Secrets
 .env
+
+# Python
 .venv/
 __pycache__/
+*.pyc
+
+# macOS
 .DS_Store
+
+# ---------------------------------------------------------------------------
+# CONFIDENTIAL — client data. Never commit anything below this line.
+#
+# The cache holds verbatim copies of the source documents; the outputs hold
+# real table, column and schema names. Only source code, schemas and the
+# synthetic sample belong in this repo.
+# ---------------------------------------------------------------------------
+
+# Extraction cache — contains the full text of every source file read
+.cache/
+
+# Run artefacts (archive mode)
+output.json
+output.xlsx
+report.json
+compare.json
+
+# Run artefacts (SQL mode)
+views.json
+views.xlsx
+views_report.json
+
+# Anything written to an output folder
+out/
+
+# Real source documents, wherever they land
+sample_data/*.xlsx
+!sample_data/sample_lineage_mapping.xlsx
+!sample_data/NBA_sample_data.xlsx
+Archive/
+*.sql
