@@ -1,6 +1,6 @@
 import jsonschema
 
-from assemble import field_key, format_key
+from assemble import ARCHIVE_STAGES, field_key, format_key
 
 MIN_PLAUSIBLE_COLUMNS = 3
 
@@ -149,10 +149,6 @@ def validate_output(result, expected_count, schema, source_text: str) -> dict:
     return {"errors": errors, "metrics": metrics}
 
 
-def _sorted_keys(keys):
-    return sorted(keys, key=lambda key: (key[0] or "", key[1]))
-
-
 def _sorted_stage_keys(stage_keys):
     return sorted(stage_keys, key=lambda pair: (pair[0], pair[1][0] or "", pair[1][1]))
 
@@ -161,36 +157,6 @@ def _counted(items, render):
     return {
         "count": len(items),
         "examples": [render(item) for item in items[:DIAGNOSTIC_EXAMPLES]],
-    }
-
-
-# Checkpoint 3: how well the two sides of the join actually met.
-#
-# These are NOT errors. The sources are partial by nature — a hop spec covers
-# the fields one job moves, a DDL sheet covers every column of the tables it
-# describes — so each side is expected to hold keys the other lacks. What the
-# report gives is the size of the gap and a sample, so a jump ("400 lineage
-# fields suddenly have no DDL") is visible as a symptom of a bad extraction.
-def join_diagnostics(lineage_records, ddl_records) -> dict:
-    lineage_keys = {
-        field_key(entry["table"], entry["column"])
-        for record in lineage_records
-        for entry in record["lineage"]
-    } - {None}
-    ddl_keys = {
-        field_key(record.get("table"), record.get("column")) for record in ddl_records
-    } - {None}
-
-    return {
-        "lineage_fields": len(lineage_keys),
-        "ddl_columns": len(ddl_keys),
-        "matched": len(lineage_keys & ddl_keys),
-        "lineage_fields_without_ddl": _counted(
-            _sorted_keys(lineage_keys - ddl_keys), format_key
-        ),
-        "ddl_columns_not_in_lineage": _counted(
-            _sorted_keys(ddl_keys - lineage_keys), format_key
-        ),
     }
 
 
@@ -257,7 +223,7 @@ def chain_diagnostics(lineage_records, stage_names) -> dict:
 # Checkpoint 4: how complete the assembled dictionary is, per column, so a
 # person can look at one table and decide whether it is fit to hand over.
 # These are counts, never errors — a blank is often the truthful answer.
-COVERAGE_STAGES = ("source", "staging", "dwh", "cloud")
+COVERAGE_STAGES = ARCHIVE_STAGES
 
 
 def coverage_metrics(lineage_records, stages=COVERAGE_STAGES) -> dict:

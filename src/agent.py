@@ -120,25 +120,6 @@ ONE COLUMN of that table.
   Vietnamese text and line breaks. Use null when the cell is empty — never
   invent or summarise a description.""",
     },
-    "ddl_sheet": {
-        "label": "DDL sheet",
-        "heading": "DDL SHEET",
-        "body": """This sheet describes the physical columns of one or more tables. One data
-row = ONE COLUMN of one table: which table it belongs to, its name, its
-datatype, its size, and any constraint.
-
-- Ignore generated-script columns (cells holding CREATE TABLE / ALTER
-  fragments): they restate the same column in another form, and emitting
-  them would duplicate records.
-- Some sheets carry two datatype columns plus a MATCH? flag marking where
-  the two disagree. Put the leftmost datatype in "datatype", and copy the
-  conflicting datatype and the flag into "notes", so the disagreement
-  survives instead of being silently resolved.
-- constraint is the stated nullability or key constraint (e.g. NOT NULL,
-  PRIMARY KEY), null if the sheet states none.
-- notes carries any remaining remark cell for that column, copied as
-  written.""",
-    },
 }
 
 
