@@ -79,45 +79,69 @@ def read_output(path) -> dict:
     return rows
 
 
-def compare(manual_path, output_path) -> dict:
-    manual, produced = read_manual(manual_path), read_output(output_path)
-    matched = sorted(set(manual) & set(produced),
-                     key=lambda k: (str(k[0]), str(k[1])))
-    only_manual = sorted(set(manual) - set(produced), key=str)
-    only_output = sorted(set(produced) - set(manual), key=str)
+MAX_MISMATCHES = 40
 
-    columns = [f"{s}_{f}" for s in STAGE_OFFSET for f in FIELDS] + ["description", "logic"]
-    agree, compared = Counter(), Counter()
-    mismatches = []
+
+def _score(manual, produced, columns, equal, excerpt=60) -> dict:
+    """Match two dictionaries of rows and score them column by column.
+
+    Both ground-truth formats reduce to the same problem: rows keyed by
+    (target field, source field), compared per column under rules that differ
+    by format. Only the columns and `equal` differ, so the matching, counting
+    and reporting live here once.
+
+    `equal(column, manual_value, program_value) -> bool` decides agreement.
+    A column blank on both sides is skipped: that is agreement about absence,
+    not a verified value.
+    """
+    matched = sorted(set(manual) & set(produced), key=str)
+    only_manual = sorted(set(manual) - set(produced), key=str)
+    agree, compared, mismatches = Counter(), Counter(), []
+
     for key in matched:
         for col in columns:
-            a, b = manual[key][col], produced[key][col]
+            a, b = manual[key].get(col, ""), produced[key].get(col, "")
             if not a and not b:
-                continue  # both blank: agreement about absence, not a value
+                continue
             compared[col] += 1
-            # Paths and prose are compared loosely: one is a citation the
-            # human typed, the other is the file the program opened.
-            same = (a == b) or (col.endswith("_path") and a.split("/")[-1] == b.split("/")[-1])
-            if not same and col in ("description", "logic"):
-                same = a[:40] == b[:40]
-            if same:
+            if equal(col, a, b):
                 agree[col] += 1
-            elif len(mismatches) < 40:
+            elif len(mismatches) < MAX_MISMATCHES:
                 mismatches.append({"row": f"{key[0]} <- {key[1]}", "column": col,
-                                   "manual": a[:60], "program": b[:60]})
+                                   "manual": a[:excerpt], "program": b[:excerpt]})
 
     total_c, total_a = sum(compared.values()), sum(agree.values())
     return {
         "manual_rows": len(manual), "program_rows": len(produced),
         "matched_rows": len(matched),
         "rows_only_in_manual": [f"{a} <- {b}" for a, b in only_manual][:10],
-        "rows_only_in_program": len(only_output),
-        "overall_field_accuracy": f"{total_a}/{total_c}"
-                                  f" ({total_a / total_c:.1%})" if total_c else "n/a",
+        "rows_only_in_program": len(set(produced) - set(manual)),
+        "overall_field_accuracy": (f"{total_a}/{total_c} ({total_a / total_c:.1%})"
+                                   if total_c else "n/a"),
         "by_column": {c: f"{agree[c]}/{compared[c]} ({agree[c] / compared[c]:.0%})"
                       for c in columns if compared[c]},
         "mismatches": mismatches,
     }
+
+
+def compare(manual_path, output_path) -> dict:
+    """Archive mode: four stage groups, plus description and logic."""
+    columns = ([f"{s}_{f}" for s in STAGE_OFFSET for f in FIELDS]
+               + ["description", "logic"])
+
+    def equal(col, a, b):
+        if a == b:
+            return True
+        # A path is a citation the human typed against the file the program
+        # opened; prose is compared on its opening, not its full wording.
+        if col.endswith("_path"):
+            return a.split("/")[-1] == b.split("/")[-1]
+        if col in ("description", "logic"):
+            return a[:40] == b[:40]
+        return False
+
+    return _score(read_manual(manual_path), read_output(output_path),
+                  columns, equal)
 
 
 def main():
@@ -223,44 +247,21 @@ def read_output_views(path) -> dict:
 
 
 def compare_views(manual_path, output_path) -> dict:
-    manual, produced = read_manual_views(manual_path), read_output_views(output_path)
-    matched = sorted(set(manual) & set(produced), key=str)
-    agree, compared = Counter(), Counter()
-    mismatches = []
-    for key in matched:
-        for col in VIEW_COMPARED:
-            a, b = manual[key].get(col, ""), produced[key].get(col, "")
-            if not a and not b:
-                continue
-            compared[col] += 1
-            same = a == b
-            if not same and col in CASELESS:
-                same = a.upper() == b.upper()
-            if not same and col == "path":
-                same = a.split("/")[-1] == b.split("/")[-1]
-            if not same and col == "transformation":
-                # SQL whitespace is not meaningful and a person transcribing an
-                # expression into a cell will not reproduce its line breaks, so
-                # compare the tokens rather than the formatting.
-                same = _squash(a) == _squash(b)
-            if same:
-                agree[col] += 1
-            elif len(mismatches) < 40:
-                mismatches.append({"row": f"{key[0]} <- {key[1]}", "column": col,
-                                   "manual": a[:70], "program": b[:70]})
-    total_c, total_a = sum(compared.values()), sum(agree.values())
-    return {
-        "manual_rows": len(manual), "program_rows": len(produced),
-        "matched_rows": len(matched),
-        "rows_only_in_manual": [f"{a} <- {b}" for a, b in
-                                sorted(set(manual) - set(produced), key=str)][:10],
-        "rows_only_in_program": len(set(produced) - set(manual)),
-        "overall_field_accuracy": (f"{total_a}/{total_c} ({total_a/total_c:.1%})"
-                                   if total_c else "n/a"),
-        "by_column": {c: f"{agree[c]}/{compared[c]} ({agree[c]/compared[c]:.0%})"
-                      for c in VIEW_COMPARED if compared[c]},
-        "mismatches": mismatches,
-    }
+    """SQL mode: identifiers compare case-insensitively, expressions by token."""
+    def equal(col, a, b):
+        if a == b:
+            return True
+        if col in CASELESS:
+            return a.upper() == b.upper()
+        if col == "path":
+            return a.split("/")[-1] == b.split("/")[-1]
+        if col == "transformation":
+            return _squash(a) == _squash(b)
+        return False
+
+    return _score(read_manual_views(manual_path), read_output_views(output_path),
+                  VIEW_COMPARED, equal, excerpt=70)
+
 
 if __name__ == "__main__":
     main()

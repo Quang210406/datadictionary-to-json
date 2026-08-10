@@ -49,9 +49,10 @@ def format_key(key) -> str:
     return f"{table}.{column}" if table else column
 
 
-def _entry(stage, table, column, datatype, size, path, sources) -> dict:
+def _entry(stage, table, column, datatype, size, path, sources, schema=None) -> dict:
     return {
         "stage": stage,
+        "schema": schema,
         "table": table,
         "column": column,
         "datatype": datatype,
@@ -261,15 +262,11 @@ def resolve_view(path, store) -> list:
 
         lineage = []
         if source["column"] or source["table"]:
-            entry = _entry("source", source["table"], source["column"],
-                           None, None, path, [])
-            entry["schema"] = source["schema"]
-            lineage.append(entry)
+            lineage.append(_entry("source", source["table"], source["column"],
+                                  None, None, path, [], source["schema"]))
 
-        view_entry = _entry("view", record.get("target_table"), column,
-                            None, None, path, [source])
-        view_entry["schema"] = None
-        lineage.append(view_entry)
+        lineage.append(_entry("view", record.get("target_table"), column,
+                              None, None, path, [source]))
 
         out.append({"description": None, "lineage": lineage})
     return out

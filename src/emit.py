@@ -22,6 +22,26 @@ WIDTHS = {1: 22, 2: 22, 3: 46, 4: 11, 5: 7, 6: 26, 7: 24, 8: 46, 9: 11, 10: 7,
 TABLE_TOKEN = re.compile(r"\b(?:STG|DWH|SRC)_[A-Z0-9_]{3,}\b", re.I)
 
 
+def _write_rows(ws, rows, start_row, should_wrap):
+    """Values into cells, formatted as text so Excel cannot reinterpret them.
+
+    Text format matters: without it Excel turns a value like "1-1" into a date,
+    which silently corrupts a dictionary.
+    """
+    for r, row in enumerate(rows, start=start_row):
+        for c, value in enumerate(row, start=1):
+            cell = ws.cell(r, c, value if value not in ("", None) else None)
+            cell.alignment = Alignment(vertical="top", wrap_text=should_wrap(c))
+            if isinstance(value, str):
+                cell.number_format = "@"
+
+
+def _apply_layout(ws, widths, freeze):
+    for c, width in widths.items():
+        ws.column_dimensions[get_column_letter(c)].width = width
+    ws.freeze_panes = freeze
+
+
 def _short(path):
     """Archive-relative path, matching how the manual sheet cites evidence."""
     if not path:
@@ -80,15 +100,8 @@ def write_workbook(lineage_records, path):
     ws.cell(1, 1).font = Font(bold=True)
     ws.cell(1, 16).font = Font(bold=True)
 
-    for r, row in enumerate(to_rows(lineage_records), start=4):
-        for c, value in enumerate(row, start=1):
-            cell = ws.cell(r, c, value if value not in ("", None) else None)
-            cell.alignment = Alignment(vertical="top", wrap_text=c >= 21)
-            if isinstance(value, str):
-                cell.number_format = "@"
-    for c, width in WIDTHS.items():
-        ws.column_dimensions[get_column_letter(c)].width = width
-    ws.freeze_panes = "A4"
+    _write_rows(ws, to_rows(lineage_records), 4, lambda c: c >= 21)
+    _apply_layout(ws, WIDTHS, "A4")
     wb.save(path)
     return path
 
@@ -136,14 +149,7 @@ def write_view_workbook(view_records, path):
         cell = ws.cell(1, j, header)
         cell.font = Font(bold=True)
         cell.fill = PatternFill("solid", fgColor="EEEEEE")
-    for r, row in enumerate(view_rows(view_records), start=2):
-        for c, value in enumerate(row, start=1):
-            cell = ws.cell(r, c, value if value not in ("", None) else None)
-            cell.alignment = Alignment(vertical="top", wrap_text=(c == 7))
-            if isinstance(value, str):
-                cell.number_format = "@"
-    for c, width in VIEW_WIDTHS.items():
-        ws.column_dimensions[get_column_letter(c)].width = width
-    ws.freeze_panes = "A2"
+    _write_rows(ws, view_rows(view_records), 2, lambda c: c == 7)
+    _apply_layout(ws, VIEW_WIDTHS, "A2")
     wb.save(path)
     return path
