@@ -19,9 +19,12 @@ from collections import Counter
 
 import pandas as pd
 
-from assemble import field_key
+from assemble import ARCHIVE_STAGES, field_key
 
-STAGE_OFFSET = {"source": 0, "staging": 5, "dwh": 10, "cloud": 15}
+# Each stage group occupies five columns in the manual sheet, in pipeline
+# order, so the offsets follow from the stage list rather than repeating it.
+STAGE_WIDTH = 5
+STAGE_OFFSET = {stage: i * STAGE_WIDTH for i, stage in enumerate(ARCHIVE_STAGES)}
 FIELDS = ["table", "column", "path", "datatype", "size"]
 HEADER_ROW = 2  # 0-based row holding "Tên Bảng", "Tên Cột", ...
 

@@ -22,7 +22,7 @@ from validate import validate_input, validate_sql_input, validate_output
 # has to be flattened into CSV; a .sql file already is text. Each returns
 # (text, expected_count, checkpoint-1 errors), so records() below is the same
 # for every kind.
-EXCEL_KINDS = ("hop_spec", "ddl_sheet", "cloud_sheet")
+EXCEL_KINDS = ("hop_spec", "cloud_sheet")
 
 
 def _read_source(path, sheet, kind):

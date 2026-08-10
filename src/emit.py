@@ -12,8 +12,13 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-GROUPS = [("Source", "source", "FFE8D6"), ("Staging", "staging", "D6E8F5"),
-          ("DWH", "dwh", "DDEEDD"), ("Cloud", "cloud", "EADCF0")]
+from assemble import ARCHIVE_STAGES
+
+# Display name and fill colour per stage; the ORDER comes from the stage list
+# so a change there cannot leave the spreadsheet a column group behind.
+STAGE_STYLE = {"source": ("Source", "FFE8D6"), "staging": ("Staging", "D6E8F5"),
+               "dwh": ("DWH", "DDEEDD"), "cloud": ("Cloud", "EADCF0")}
+GROUPS = [(STAGE_STYLE[s][0], s, STAGE_STYLE[s][1]) for s in ARCHIVE_STAGES]
 STAGE_COLS = ["Tên Bảng", "Tên Cột", "Đường Dẫn", "datatype", "size"]
 TAIL_COLS = ["Mô Tả", "transformation logic", "Logic Notes", "Join / Depends-on"]
 WIDTHS = {1: 22, 2: 22, 3: 46, 4: 11, 5: 7, 6: 26, 7: 24, 8: 46, 9: 11, 10: 7,

@@ -18,7 +18,6 @@ def df_to_text(df: pd.DataFrame) -> str:
 # and the exact captions vary ("Source column Name", "Column Name", "Field").
 HEADER_ANCHORS = {
     "hop_spec": (("target",), ("source",)),
-    "ddl_sheet": (("column", "field"), ("type", "datatype")),
     # Without this the completeness check silently skipped cloud sheets, and
     # a truncated reply (23 records for a 48-row sheet) passed unnoticed.
     "cloud_sheet": (("column", "trường"), ("type", "length")),

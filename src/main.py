@@ -9,9 +9,8 @@ from validate import chain_diagnostics, coverage_metrics
 
 ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_DIR = ROOT / "schemas"
-SCHEMA_FILES = {"hop_spec": "hop_record.json", "ddl_sheet": "ddl_record.json",
-                "cloud_sheet": "cloud_record.json", "view_sql": "view_record.json"}
-STAGES = ["source", "staging", "dwh", "cloud"]
+SCHEMA_FILES = {"hop_spec": "hop_record.json", "cloud_sheet": "cloud_record.json",
+                "view_sql": "view_record.json"}
 
 
 def load_schemas():
@@ -144,8 +143,8 @@ def main():
         "files_read": len(store.reports),
         "files_converted": store.converted,
         "sources": store.reports,
-        "coverage": coverage_metrics(records),
-        "chain_diagnostics": chain_diagnostics(records, STAGES),
+        "coverage": coverage_metrics(records, assemble.ARCHIVE_STAGES),
+        "chain_diagnostics": chain_diagnostics(records, assemble.ARCHIVE_STAGES),
         "source_errors": source_errors,
     }
 

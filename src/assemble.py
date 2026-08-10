@@ -18,6 +18,11 @@ from copy import deepcopy
 
 from catalog import build_catalog
 
+# The stages an archive field passes through, in pipeline order. THIS IS THE
+# ONE DEFINITION: emit, compare, validate and main all derive their stage
+# handling from it, so the four cannot drift out of agreement.
+ARCHIVE_STAGES = ["source", "staging", "dwh", "cloud"]
+
 # Which stage each side of a hop belongs to, per folder. One file always
 # describes one transition, and the folder says which.
 STAGE_OF = {
@@ -201,30 +206,6 @@ def build_cloud_index(cloud_path, sheets, store) -> dict:
             if key is not None:
                 index.setdefault(key, {**record, "path": cloud_path})
     return index
-
-
-def merge_field_detail(lineage_records, ddl_records) -> list:
-    """Attach datatype/size/constraint from a standalone DDL sheet.
-
-    Kept for archives that ship one. The Loyalty hop specs state datatype at
-    both ends of every row, so nothing needs this there.
-    """
-    index = {}
-    for record in ddl_records:
-        key = field_key(record.get("table"), record.get("column"))
-        if key is not None and key not in index:
-            index[key] = record
-
-    merged = deepcopy(lineage_records)
-    for record in merged:
-        for entry in record["lineage"]:
-            detail = index.get(field_key(entry["table"], entry["column"]))
-            if detail is None or entry["datatype"]:
-                continue
-            entry["datatype"] = detail.get("datatype")
-            entry["size"] = detail.get("size")
-            entry["constraint"] = detail.get("constraint")
-    return merged
 
 
 # ------------------------------------------------------------ SQL views
