@@ -1,0 +1,49 @@
+{
+  "$comment": "The final assembled shape: one record per field, tracing that field through every stage. Not an agent output — assemble.py builds it in plain Python from hop_record + ddl_record. 'sources' is a list per field: 1-1 means length 1 (0 at the stage where the field originates), and n-1 later means length > 1 without a shape change.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "description": { "type": ["string", "null"] },
+      "lineage": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "stage":        { "type": "string" },
+            "table":        { "type": ["string", "null"] },
+            "column":       { "type": ["string", "null"] },
+            "datatype":     { "type": ["string", "null"] },
+            "size":         { "type": ["string", "null"] },
+            "constraint":   { "type": ["string", "null"] },
+            "doc_link":     { "type": ["string", "null"] },
+            "offline_path": { "type": ["string", "null"] },
+            "sources": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "table":                { "type": ["string", "null"] },
+                  "column":               { "type": ["string", "null"] },
+                  "transformation_type":  { "type": ["string", "null"] },
+                  "transformation_logic": { "type": ["string", "null"] }
+                },
+                "required": [
+                  "table",
+                  "column",
+                  "transformation_type",
+                  "transformation_logic"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["stage", "table", "column", "sources"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["lineage"],
+    "additionalProperties": false
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "$comment": "One record per data row of a DDL sheet: one column of one table. Same convention as hop_record — every key required, unknown values null. column is the one value that may not be null because (table, column) is the join key into the lineage.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "table":      { "type": ["string", "null"] },
+      "column":     { "type": "string" },
+      "datatype":   { "type": ["string", "null"] },
+      "size":       { "type": ["string", "null"] },
+      "constraint": { "type": ["string", "null"] },
+      "notes":      { "type": ["string", "null"] }
+    },
+    "required": ["table", "column", "datatype", "size", "constraint", "notes"],
+    "additionalProperties": false
+  }
+}

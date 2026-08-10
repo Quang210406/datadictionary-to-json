@@ -1,0 +1,29 @@
+{
+  "$comment": "One record per (declared view column, source field) pair in a CREATE VIEW script. n-1 is several records sharing one target_column. Field names deliberately match hop_record where the meaning matches, so the completeness and fidelity checks work unchanged. No datatype/size: a view declares neither.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "target_table":         { "type": "string" },
+      "target_column":        { "type": "string" },
+      "source_schema":        { "type": ["string", "null"] },
+      "source_table":         { "type": ["string", "null"] },
+      "source_column":        { "type": ["string", "null"] },
+      "source_alias":         { "type": ["string", "null"] },
+      "source_role":          { "type": ["string", "null"],
+                                "enum": ["value", "join", "condition", null] },
+      "transformation_logic": { "type": ["string", "null"] }
+    },
+    "required": [
+      "target_table",
+      "target_column",
+      "source_schema",
+      "source_table",
+      "source_column",
+      "source_alias",
+      "source_role",
+      "transformation_logic"
+    ],
+    "additionalProperties": false
+  }
+}

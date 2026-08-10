@@ -1,0 +1,35 @@
+{
+  "$comment": "One record per (target field, source field) pair in a hop spec. n-1 is expressed as SEVERAL records sharing one target_column — never as one record with stuffed cells. Datatype and size are captured at BOTH ends because they change across a hop in ~10% of rows. Every key is required so unknowns are explicit nulls; target_column is the join key, so it is the one value that may not be null.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "target_table":         { "type": ["string", "null"] },
+      "target_column":        { "type": "string" },
+      "target_datatype":      { "type": ["string", "null"] },
+      "target_size":          { "type": ["string", "null"] },
+      "source_table":         { "type": ["string", "null"] },
+      "source_column":        { "type": ["string", "null"] },
+      "source_datatype":      { "type": ["string", "null"] },
+      "source_size":          { "type": ["string", "null"] },
+      "transformation_type":  { "type": ["string", "null"] },
+      "transformation_logic": { "type": ["string", "null"] },
+      "source_role":          { "type": ["string", "null"],
+                                "enum": ["value", "join", "condition", null] }
+    },
+    "required": [
+      "target_table",
+      "target_column",
+      "target_datatype",
+      "target_size",
+      "source_table",
+      "source_column",
+      "source_datatype",
+      "source_size",
+      "transformation_type",
+      "transformation_logic",
+      "source_role"
+    ],
+    "additionalProperties": false
+  }
+}
