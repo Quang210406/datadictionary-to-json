@@ -175,7 +175,6 @@ of them:
 | `hop_record.json` | one row of a mapping spec | target/source table+column+datatype+size, transformation, `source_role` |
 | `view_record.json` | one (declared column, source) pair in a view | target table+column, source schema+table+column+alias, `source_role`, transformation |
 | `cloud_record.json` | one row of the cloud reference | table, column, datatype, size, nullable, **description** |
-| `ddl_record.json` | one column of a standalone DDL sheet | *currently unused* |
 | `lineage.json` | the assembled shape | *currently not enforced — see Known gaps* |
 
 `view_record` deliberately reuses `hop_record`'s field names where the meaning
@@ -277,20 +276,3 @@ schemas/     5 JSON contracts
 .cache/      extraction cache (gitignored; delete to force re-read)
 ```
 
----
-
-## Known gaps
-
-- **`lineage.json` is not enforced.** The assembled output has no schema
-  validation; it was checked in an earlier version and the check was dropped in
-  a rewrite. Worth restoring — about four lines.
-- **`merge_field_detail`, `join_diagnostics`, the `ddl_sheet` prompt and
-  `ddl_record.json` have no callers.** They were for standalone DDL sheets,
-  which the current archive does not usefully provide.
-- **The archive layout is assumed, not configured.** Folder names, the cloud
-  workbook's filename pattern, and the four stage names are hard-coded. A
-  differently-organised archive fails loudly; a *slightly* different one can
-  fail quietly.
-- **`doc_link` is always null** — nothing supplies an online link.
-- **Descriptions are copied, never generated.** Where no source states a
-  meaning, the field is null.
