@@ -62,10 +62,17 @@ def _check_shape(result, schema):
 # expected_count may be None when the row count of a source is not
 # recoverable from its layout; the count is then reported, not judged.
 def _check_completeness(result, expected_count):
+    """Did every input row / declared column produce a record?
+
+    Returns (errors, records emitted, target fields covered). The two counts
+    differ under n-1, where one target field legitimately produces several
+    records, so both are reported: the check is on FIELDS, and quoting the
+    record count alone reads like a failure when nothing is wrong.
+    """
     errors = []
     got_count = len(result) if isinstance(result, list) else 0
     if expected_count is None or not isinstance(result, list):
-        return errors, got_count
+        return errors, got_count, got_count
     # One INPUT ROW is one target field. n-1 turns that row into several
     # records sharing a target, so the invariant is the number of distinct
     # target fields, not the number of records.
@@ -77,10 +84,10 @@ def _check_completeness(result, expected_count):
     covered = len(targets) if targets else got_count
     if covered != expected_count:
         errors.append(
-            f"Record count mismatch: expected {expected_count} target field(s), "
+            f"Completeness mismatch: expected {expected_count} target field(s), "
             f"got {covered} (from {got_count} records)."
         )
-    return errors, got_count
+    return errors, got_count, covered
 
 # fidelity (only meaningful if we actually got a list of records)
 # Walks records of any shape, so the same check covers the flat agent
@@ -130,7 +137,7 @@ def _check_fidelity(result, source_text):
 # Returns {"errors": [...], "metrics": {...}}.
 def validate_output(result, expected_count, schema, source_text: str) -> dict:
     shape_errors, dirty_records = _check_shape(result, schema)
-    count_errors, got_count = _check_completeness(result, expected_count)
+    count_errors, got_count, covered = _check_completeness(result, expected_count)
     fidelity_errors, fidelity_checked, fidelity_missing, null_count = _check_fidelity(
         result, source_text
     )
@@ -140,8 +147,11 @@ def validate_output(result, expected_count, schema, source_text: str) -> dict:
     errors = shape_errors + count_errors + fidelity_errors
 
     metrics = {
-        "record_completeness": f"{got_count}/"
+        # What the completeness check actually tested, and the record count
+        # separately: under n-1 the two differ and conflating them misleads.
+        "fields_covered": f"{covered}/"
         f"{expected_count if expected_count is not None else 'unknown'}",
+        "records_emitted": got_count,
         "schema_clean_records": f"{got_count - len(dirty_records)}/{got_count}",
         "fidelity_verified": f"{fidelity_checked - fidelity_missing}/{fidelity_checked}",
         "output_null_count": null_count,
