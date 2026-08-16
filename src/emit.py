@@ -12,13 +12,20 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from assemble import ARCHIVE_STAGES
+from assemble import stages_in
 
-# Display name and fill colour per stage; the ORDER comes from the stage list
-# so a change there cannot leave the spreadsheet a column group behind.
-STAGE_STYLE = {"source": ("Source", "FFE8D6"), "staging": ("Staging", "D6E8F5"),
-               "dwh": ("DWH", "DDEEDD"), "cloud": ("Cloud", "EADCF0")}
-GROUPS = [(STAGE_STYLE[s][0], s, STAGE_STYLE[s][1]) for s in ARCHIVE_STAGES]
+# Fill colour per known stage; an archive with stages we have no colour for
+# still emits, cycling the palette rather than failing.
+STAGE_COLOURS = {"source": "FFE8D6", "staging": "D6E8F5",
+                 "dwh": "DDEEDD", "cloud": "EADCF0"}
+PALETTE = ["FFE8D6", "D6E8F5", "DDEEDD", "EADCF0", "F5E6CC", "E0E0F0"]
+
+
+def stage_groups(stages) -> list:
+    """(display name, stage, fill) per stage, in pipeline order."""
+    return [(stage.replace("_", " ").title(), stage,
+             STAGE_COLOURS.get(stage, PALETTE[i % len(PALETTE)]))
+            for i, stage in enumerate(stages)]
 STAGE_COLS = ["Tên Bảng", "Tên Cột", "Đường Dẫn", "datatype", "size"]
 TAIL_COLS = ["Mô Tả", "transformation logic", "Logic Notes", "Join / Depends-on"]
 WIDTHS = {1: 22, 2: 22, 3: 46, 4: 11, 5: 7, 6: 26, 7: 24, 8: 46, 9: 11, 10: 7,
@@ -69,12 +76,12 @@ def _tail(record):
             logic or None, ", ".join(sorted(named)) or None)
 
 
-def to_rows(lineage_records) -> list:
+def to_rows(lineage_records, groups) -> list:
     rows = []
     for record in lineage_records:
         by_stage = {e["stage"]: e for e in record["lineage"]}
         row = []
-        for _, stage, _ in GROUPS:
+        for _, stage, _ in groups:
             entry = by_stage.get(stage)
             row += ([entry["table"], entry["column"], _short(entry["offline_path"]),
                      entry["datatype"], entry["size"]] if entry else [None] * 5)
@@ -82,13 +89,12 @@ def to_rows(lineage_records) -> list:
     return rows
 
 
-def write_workbook(lineage_records, path):
+def write_workbook(lineage_records, path, stages=None):
+    groups = stage_groups(stages or stages_in(lineage_records))
     wb = Workbook()
     ws = wb.active
     ws.title = "Sheet1"
-    ws.cell(1, 1, "On-premises")
-    ws.cell(1, 16, "Cloud")
-    for i, (name, _, color) in enumerate(GROUPS):
+    for i, (name, _, color) in enumerate(groups):
         off = i * 5
         ws.cell(2, off + 1, name)
         fill = PatternFill("solid", fgColor=color)
@@ -98,14 +104,13 @@ def write_workbook(lineage_records, path):
             ws.cell(3, off + k + 1).fill = fill
             ws.cell(3, off + k + 1).font = Font(bold=True)
         ws.cell(2, off + 1).font = Font(bold=True)
+    tail_start = len(groups) * len(STAGE_COLS) + 1
     for k, header in enumerate(TAIL_COLS):
-        cell = ws.cell(3, 21 + k, header)
+        cell = ws.cell(3, tail_start + k, header)
         cell.font = Font(bold=True)
         cell.fill = PatternFill("solid", fgColor="EEEEEE")
-    ws.cell(1, 1).font = Font(bold=True)
-    ws.cell(1, 16).font = Font(bold=True)
-
-    _write_rows(ws, to_rows(lineage_records), 4, lambda c: c >= 21)
+    _write_rows(ws, to_rows(lineage_records, groups), 4,
+                lambda c: c >= tail_start)
     _apply_layout(ws, WIDTHS, "A4")
     wb.save(path)
     return path

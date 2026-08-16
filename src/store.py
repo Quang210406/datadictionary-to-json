@@ -2,14 +2,15 @@
 
 Resolving a chain visits files as it discovers them, so the whole archive is
 never converted up front: a run touches only the tables it actually reaches.
-Results are cached on disk by (path, sheet, mtime), so re-running after a
-code change costs nothing and a person can iterate on the assembly logic
-without paying for the same extraction twice.
+Results are cached on disk by the file's CONTENT, so re-running after a
+code change costs nothing, and a cache can be shipped to another machine —
+letting someone test the whole pipeline without an API key of their own.
 
 Everything AI-shaped lives here. Assembly asks this store for records and
 gets plain dicts back, so the join logic stays deterministic and testable.
 """
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -43,11 +44,46 @@ class RecordStore:
         self._memory = {}          # (path, sheet, kind) -> records
         self._disk = {}
         if self.cache_path and self.cache_path.exists():
-            self._disk = json.loads(self.cache_path.read_text(encoding="utf-8"))
+            raw = json.loads(self.cache_path.read_text(encoding="utf-8"))
+            self._disk, dropped = self._migrate(raw)
+            if len(self._disk) != len(raw) or dropped:
+                self._flush()
+                if verbose:
+                    print(f"  cache: re-keyed {len(self._disk)} entries"
+                          + (f", dropped {dropped} stale" if dropped else ""))
 
     def _key(self, path, sheet, kind):
-        mtime = int(Path(path).stat().st_mtime)
-        return f"{kind}|{path}|{sheet}|{mtime}"
+        """Cache key from the file's CONTENT, not its location.
+
+        Keying on path + mtime tied the cache to one machine: copying the
+        project elsewhere invalidated everything, and a `touch` threw away
+        work that was still valid. Hashing the bytes makes an extraction
+        reusable wherever the same file turns up — so a cache can be shipped
+        with the project and a tester can run the whole pipeline without an
+        API key of their own.
+        """
+        digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
+        return f"{kind}|{digest}|{sheet}"
+
+    @staticmethod
+    def _migrate(disk):
+        """Re-key a cache written by the old path+mtime scheme.
+
+        Those entries cost real API calls; rather than discard them, re-key
+        any whose file is still present and still identical.
+        """
+        migrated, dropped = {}, 0
+        for key, value in disk.items():
+            parts = key.split("|")
+            if len(parts) == 3:
+                migrated[key] = value
+                continue
+            if len(parts) == 4 and parts[3].isdigit() and Path(parts[1]).exists():
+                digest = hashlib.sha256(Path(parts[1]).read_bytes()).hexdigest()[:16]
+                migrated[f"{parts[0]}|{digest}|{parts[2]}"] = value
+            else:
+                dropped += 1
+        return migrated, dropped
 
     def records(self, path, sheet, kind) -> list:
         """Records for one sheet, converting it only the first time."""

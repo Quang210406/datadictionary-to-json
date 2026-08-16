@@ -1,6 +1,6 @@
 import jsonschema
 
-from assemble import ARCHIVE_STAGES, field_key, format_key
+from assemble import field_key, format_key, stages_in
 
 MIN_PLAUSIBLE_COLUMNS = 3
 
@@ -233,10 +233,10 @@ def chain_diagnostics(lineage_records, stage_names) -> dict:
 # Checkpoint 4: how complete the assembled dictionary is, per column, so a
 # person can look at one table and decide whether it is fit to hand over.
 # These are counts, never errors — a blank is often the truthful answer.
-COVERAGE_STAGES = ARCHIVE_STAGES
 
 
-def coverage_metrics(lineage_records, stages=COVERAGE_STAGES) -> dict:
+def coverage_metrics(lineage_records, stages=None) -> dict:
+    stages = stages or stages_in(lineage_records)
     total = len(lineage_records)
     if not total:
         return {"records": 0}

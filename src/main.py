@@ -4,6 +4,8 @@ from pathlib import Path
 import assemble
 import emit
 from catalog import build_catalog, cloud_sheets, find_cloud_workbook
+from layout import (LayoutError, cloud_stage, final_hop_dir, load_layout,
+                    table_prefixes)
 from store import RecordStore
 from validate import chain_diagnostics, coverage_metrics
 
@@ -26,8 +28,12 @@ def parse_args(argv=None):
                         help="folder of CREATE VIEW .sql scripts (or one file). "
                              "Builds view lineage instead of an archive chain.")
     parser.add_argument("--archive", metavar="DIR",
-                        help="folder holding SRC_STGDIH/, STGDIH_DWHDIH/ and the "
-                             "DWH-to-CLOUD reference workbook.")
+                        help="archive root: the hop folders and the final-stage "
+                             "workbook, as described by the layout.")
+    parser.add_argument("--layout", metavar="FILE",
+                        help="JSON describing the archive's folders and stages. "
+                             "Defaults to archive.json inside the archive, then "
+                             "to the built-in layout.")
     parser.add_argument("--table", action="append", default=[], metavar="TABLE",
                         help="target table to build, e.g. DWH_TEMP_CLIENT. "
                              "Repeatable; omit to build every DWH table found.")
@@ -102,38 +108,51 @@ def build_views(args):
            [("View chaining:", {"resolved_through_another_view": chained})])
 
 
-def main():
-    args = parse_args()
+def run(args):
+    """Execute one run. Separate from argument parsing so the GUI can call it
+    with the same options the command line would produce."""
     if args.sql:
         return build_views(args)
     if not args.archive:
         print("Give either --archive DIR or --sql DIR"); sys.exit(1)
-    catalog = build_catalog(args.archive)
-    if not catalog:
-        print(f"No hop specs found under {args.archive}"); sys.exit(1)
+    try:
+        layout = load_layout(args.archive, args.layout)
+    except (LayoutError, ValueError) as exc:
+        print(f"Bad archive layout: {exc}"); sys.exit(1)
 
+    catalog = build_catalog(args.archive, layout)
+    if not catalog:
+        print(f"No hop specs found under {args.archive}. Expected folders: "
+              f"{', '.join(h['dir'] for h in layout['hops'])}"); sys.exit(1)
+
+    # By default build the tables produced by the last hop — the end of the
+    # pipeline as this layout describes it.
+    last_dir = final_hop_dir(layout)
     targets = [t.strip().upper() for t in args.table] or sorted(
-        t for t, v in catalog.items() if v["stage_dir"] == "STGDIH_DWHDIH")
+        t for t, v in catalog.items() if v["stage_dir"] == last_dir)
     missing = [t for t in targets if t not in catalog]
     if missing:
         print("Not in the archive: " + ", ".join(missing)); sys.exit(1)
 
     store = RecordStore(load_schemas(), cache_path=args.cache)
-    cloud_path = find_cloud_workbook(args.archive)
+    cloud_path = find_cloud_workbook(args.archive, layout)
     print(f"Archive: {len(catalog)} tables indexed | building {len(targets)}")
 
     cloud_index = {}
     if cloud_path:
         # A cloud sheet may drop the warehouse prefix: DWH_FDM_TRAN_HIS is
-        # filed under "FDM_TRAN_HIS". Accept either spelling.
-        wanted = set(targets) | {t[4:] for t in targets if t.startswith("DWH_")}
+        # filed under "FDM_TRAN_HIS". Accept every configured spelling.
+        wanted = set(targets)
+        for prefix in table_prefixes(layout):
+            wanted |= {t[len(prefix):] for t in targets if t.startswith(prefix.upper())}
         sheets = {t: s for t, s in cloud_sheets(cloud_path).items() if t in wanted}
         if sheets:
             cloud_index = assemble.build_cloud_index(cloud_path, sheets, store)
 
     records = []
     for table in targets:
-        records += assemble.resolve_table(table, catalog, store, cloud_index)
+        records += assemble.resolve_table(table, catalog, store, cloud_index,
+                                          cloud_stage(layout), table_prefixes(layout))
 
     # Per-source checkpoints, gathered from every file the run actually read.
     source_errors = [f"{Path(r['path']).name} [{r['sheet']}]: {e}"
@@ -143,8 +162,8 @@ def main():
         "files_read": len(store.reports),
         "files_converted": store.converted,
         "sources": store.reports,
-        "coverage": coverage_metrics(records, assemble.ARCHIVE_STAGES),
-        "chain_diagnostics": chain_diagnostics(records, assemble.ARCHIVE_STAGES),
+        "coverage": coverage_metrics(records, layout["stages"]),
+        "chain_diagnostics": chain_diagnostics(records, layout["stages"]),
         "source_errors": source_errors,
     }
 
@@ -154,6 +173,10 @@ def main():
                "complete_chains": f"{chain['complete_chains']}/{chain['chains']}",
                "unmatched_tails": chain["unmatched_tails"]["count"],
                "unmatched_heads": chain["unmatched_heads"]["count"]})])
+
+def main():
+    run(parse_args())
+
 
 if __name__ == "__main__":
     main()

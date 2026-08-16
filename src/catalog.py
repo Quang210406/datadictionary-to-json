@@ -15,16 +15,10 @@ from pathlib import Path
 
 import pandas as pd
 
-# The reference workbook holds the final (cloud) stage: one sheet per table,
-# rather than one file per table like the hop specs.
-CLOUD_GLOB = "*Mapping*CLOUD*.xlsx"
-HOP_DIRS = ("SRC_STGDIH", "STGDIH_DWHDIH")
-
-# Sheets in a hop workbook that are not the hop itself.
-NON_HOP_SHEETS = {"DDL"}
+from layout import DEFAULT_LAYOUT, hop_dirs, stages_of_dir
 
 
-def _table_of(path: Path) -> tuple:
+def _table_of(path: Path, non_hop_sheets) -> tuple:
     """(table name, sheet name) for one hop workbook.
 
     The first sheet is named after the table it targets, which is more
@@ -36,12 +30,12 @@ def _table_of(path: Path) -> tuple:
     except Exception:
         return None, None
     for sheet in sheets:
-        if sheet.strip().upper() not in NON_HOP_SHEETS:
+        if sheet.strip().upper() not in non_hop_sheets:
             return sheet.strip().upper(), sheet
     return path.stem.strip().upper(), sheets[0]
 
 
-def build_catalog(archive_dir) -> dict:
+def build_catalog(archive_dir, layout=None) -> dict:
     """{TABLE -> {"path", "sheet", "stage_dir"}} for every hop workbook.
 
     A file whose NAME matches the table always wins over one that merely
@@ -50,19 +44,25 @@ def build_catalog(archive_dir) -> dict:
     called STG_FDM_TRAN_HIS), and resolving through those would silently
     read the wrong table's mappings.
     """
+    layout = layout or DEFAULT_LAYOUT
+    non_hop_sheets = {s.strip().upper() for s in layout.get("non_hop_sheets", [])}
     archive = Path(archive_dir)
     catalog = {}
-    for stage_dir in HOP_DIRS:
+    for stage_dir in hop_dirs(layout):
         folder = archive / stage_dir
         if not folder.is_dir():
             continue
         for path in sorted(folder.glob("*.xlsx")):
             if path.name.startswith("~$"):
                 continue
-            table, sheet = _table_of(path)
+            table, sheet = _table_of(path, non_hop_sheets)
             if not table:
                 continue
-            entry = {"path": str(path), "sheet": sheet, "stage_dir": stage_dir}
+            # The stage names are stamped on here, so assembly reads them off
+            # the entry instead of consulting a table of folder names.
+            from_stage, to_stage = stages_of_dir(layout, stage_dir)
+            entry = {"path": str(path), "sheet": sheet, "stage_dir": stage_dir,
+                     "from_stage": from_stage, "to_stage": to_stage}
             # A file name may carry a version suffix the sheet does not
             # ("STG_MDM_CIF_ADDRESS_v1_20240530.xlsx" holds STG_MDM_CIF_ADDRESS).
             stem = path.stem.strip().upper()
@@ -73,9 +73,13 @@ def build_catalog(archive_dir) -> dict:
     return catalog
 
 
-def find_cloud_workbook(archive_dir):
-    """The hand-built DWH->CLOUD mapping, or None when it is absent."""
-    matches = sorted(Path(archive_dir).glob(CLOUD_GLOB))
+def find_cloud_workbook(archive_dir, layout=None):
+    """The workbook holding the final stage, or None when it is absent."""
+    layout = layout or DEFAULT_LAYOUT
+    pattern = (layout.get("cloud") or {}).get("glob")
+    if not pattern:
+        return None
+    matches = sorted(Path(archive_dir).glob(pattern))
     return str(matches[0]) if matches else None
 
 
