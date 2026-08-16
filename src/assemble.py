@@ -18,19 +18,6 @@ from copy import deepcopy
 
 from catalog import build_catalog
 
-# The stages an archive field passes through, in pipeline order. THIS IS THE
-# ONE DEFINITION: emit, compare, validate and main all derive their stage
-# handling from it, so the four cannot drift out of agreement.
-ARCHIVE_STAGES = ["source", "staging", "dwh", "cloud"]
-
-# Which stage each side of a hop belongs to, per folder. One file always
-# describes one transition, and the folder says which.
-STAGE_OF = {
-    "SRC_STGDIH": ("source", "staging"),
-    "STGDIH_DWHDIH": ("staging", "dwh"),
-}
-CLOUD_STAGE = "cloud"
-
 MAX_DEPTH = 8  # guards against a table that (transitively) sources itself
 
 
@@ -47,6 +34,22 @@ def field_key(table, column):
     if not normalized_column:
         return None
     return (_normalize(table), normalized_column)
+
+
+def stages_in(records) -> list:
+    """The stage names present, in pipeline order, read off the records.
+
+    Emit, compare and the coverage metrics all need to know the stages. Taking
+    them from the data rather than a constant means they work on any archive
+    shape without being told what it is. The longest chain gives the order,
+    since a record missing an early stage would otherwise mislead about it.
+    """
+    order = []
+    for record in sorted(records, key=lambda r: -len(r.get("lineage", []))):
+        for entry in record.get("lineage", []):
+            if entry["stage"] not in order:
+                order.append(entry["stage"])
+    return order
 
 
 def format_key(key) -> str:
@@ -82,17 +85,18 @@ def _source_of(record) -> dict:
     }
 
 
-def _cloud_lookup(cloud_index, table, column):
+def _cloud_lookup(cloud_index, table, column, prefixes=()):
     """Cloud detail for a warehouse field.
 
     The cloud workbook files some tables without the warehouse prefix
     (DWH_FDM_TRAN_HIS is on a sheet called FDM_TRAN_HIS) and others with it,
-    so try both spellings before giving up.
+    so try each configured prefix stripped before giving up.
     """
     names = [table]
     normalized = _normalize(table) or ""
-    if normalized.startswith("DWH_"):
-        names.append(table[4:])
+    for prefix in prefixes:
+        if normalized.startswith(prefix.upper()):
+            names.append(table[len(prefix):])
     for name in names:
         detail = cloud_index.get(field_key(name, column))
         if detail:
@@ -137,7 +141,7 @@ def _walk_back(table, column, catalog, store, depth, seen):
     # real but it turns the chain into a tree; current scope keeps the
     # nearest source line and the diagnostics report the rest.
     record = matches[0]
-    src_stage, tgt_stage = STAGE_OF.get(owner["stage_dir"], ("source", "staging"))
+    src_stage, tgt_stage = owner["from_stage"], owner["to_stage"]
 
     entry = _entry(tgt_stage, owner_table, column,
                    record.get("target_datatype"), record.get("target_size"),
@@ -152,12 +156,17 @@ def _walk_back(table, column, catalog, store, depth, seen):
     return upstream + [entry]
 
 
-def resolve_table(target_table, catalog, store, cloud_index=None) -> list:
-    """One lineage record per (target field, source field) of one table."""
+def resolve_table(target_table, catalog, store, cloud_index=None,
+                  cloud_stage="cloud", table_prefixes=()) -> list:
+    """One lineage record per (target field, source field) of one table.
+
+    The stage names come from the catalog entry, which the layout stamped on
+    when the archive was indexed; nothing here knows a folder name.
+    """
     owner = catalog.get(_normalize(target_table))
     if owner is None:
         return []
-    src_stage, tgt_stage = STAGE_OF.get(owner["stage_dir"], ("staging", "dwh"))
+    src_stage, tgt_stage = owner["from_stage"], owner["to_stage"]
     cloud_index = cloud_index or {}
 
     # Same rule as _walk_back: the sheet names the table, not the row cell.
@@ -183,9 +192,9 @@ def resolve_table(target_table, catalog, store, cloud_index=None) -> list:
 
         lineage = upstream + [entry]
 
-        detail = _cloud_lookup(cloud_index, table, column)
+        detail = _cloud_lookup(cloud_index, table, column, table_prefixes)
         if detail:
-            lineage.append(_entry(CLOUD_STAGE, detail.get("table"), detail.get("column"),
+            lineage.append(_entry(cloud_stage, detail.get("table"), detail.get("column"),
                                   detail.get("datatype"), detail.get("size"),
                                   detail.get("path"), []))
             lineage[-1]["constraint"] = detail.get("nullable")

@@ -19,12 +19,16 @@ from collections import Counter
 
 import pandas as pd
 
-from assemble import ARCHIVE_STAGES, field_key
+from assemble import field_key, stages_in
 
 # Each stage group occupies five columns in the manual sheet, in pipeline
-# order, so the offsets follow from the stage list rather than repeating it.
+# order. The stage list is read from the output being scored, so a manual
+# sheet with a different number of groups is handled without configuration.
 STAGE_WIDTH = 5
-STAGE_OFFSET = {stage: i * STAGE_WIDTH for i, stage in enumerate(ARCHIVE_STAGES)}
+
+
+def stage_offsets(stages) -> dict:
+    return {stage: i * STAGE_WIDTH for i, stage in enumerate(stages)}
 FIELDS = ["table", "column", "path", "datatype", "size"]
 HEADER_ROW = 2  # 0-based row holding "Tên Bảng", "Tên Cột", ...
 
@@ -41,12 +45,12 @@ def _clean(value):
     return unicodedata.normalize("NFC", str(value)).strip()
 
 
-def read_manual(path) -> dict:
+def read_manual(path, offsets) -> dict:
     df = pd.read_excel(path, header=None)
     rows = {}
     for i in range(HEADER_ROW + 1, len(df)):
         row = {}
-        for stage, off in STAGE_OFFSET.items():
+        for stage, off in offsets.items():
             for k, name in enumerate(FIELDS):
                 row[f"{stage}_{name}"] = _clean(df.iloc[i, off + k])
         row["description"] = _clean(df.iloc[i, 20])
@@ -59,13 +63,15 @@ def read_manual(path) -> dict:
     return rows
 
 
-def read_output(path) -> dict:
+def read_output(path) -> tuple:
+    """Rows keyed for comparison, plus the stage list the output actually has."""
     records = json.loads(open(path, encoding="utf-8").read())
+    offsets = stage_offsets(stages_in(records))
     rows = {}
     for record in records:
         by_stage = {e["stage"]: e for e in record["lineage"]}
         row = {}
-        for stage in STAGE_OFFSET:
+        for stage in offsets:
             entry = by_stage.get(stage)
             for name in FIELDS:
                 src = {"path": "offline_path"}.get(name, name)
@@ -79,7 +85,7 @@ def read_output(path) -> dict:
         key = (field_key(row["dwh_table"], row["dwh_column"]),
                field_key(row["staging_table"], row["staging_column"]))
         rows.setdefault(key, row)
-    return rows
+    return rows, offsets
 
 
 MAX_MISMATCHES = 40
@@ -129,7 +135,8 @@ def _score(manual, produced, columns, equal, excerpt=60) -> dict:
 
 def compare(manual_path, output_path) -> dict:
     """Archive mode: four stage groups, plus description and logic."""
-    columns = ([f"{s}_{f}" for s in STAGE_OFFSET for f in FIELDS]
+    produced, offsets = read_output(output_path)
+    columns = ([f"{s}_{f}" for s in offsets for f in FIELDS]
                + ["description", "logic"])
 
     def equal(col, a, b):
@@ -143,8 +150,7 @@ def compare(manual_path, output_path) -> dict:
             return a[:40] == b[:40]
         return False
 
-    return _score(read_manual(manual_path), read_output(output_path),
-                  columns, equal)
+    return _score(read_manual(manual_path, offsets), produced, columns, equal)
 
 
 def main():
