@@ -1,0 +1,17 @@
+# Runtime dependencies for the command line program (src/).
+#
+# Pinned to the versions the published accuracy figures were measured with.
+# pandas in particular: 3.x changes how sheets serialise to CSV, which changes
+# the text the AI agent is given, which changes the extraction.
+#
+#   python3 -m venv .venv
+#   .venv/bin/pip install -r requirements.txt
+#
+# Building the desktop app needs a different, stricter environment; see
+# build/requirements-build.txt and the README.
+
+pandas==2.3.3
+openpyxl==3.1.5
+jsonschema==4.25.1
+python-dotenv==1.2.1
+google-genai==1.47.0
