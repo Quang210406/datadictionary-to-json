@@ -38,3 +38,12 @@ dist/
 build/hecate/
 build/icon.iconset/
 build/_icon_1024.png
+
+# Desktop app and its build tooling. Delivered privately to one reviewer, not
+# part of the published CLI project.
+app/
+build/
+introduction.md
+introduction.pdf
+requirements.txt
+.env.example

@@ -59,29 +59,6 @@ Omit `--table` to build every table produced by the last hop.
 python src/main.py --sql path/to/sql/folder --out views.json --xlsx views.xlsx
 ```
 
-### As a desktop app
-
-For reviewers who do not use a terminal, the same program ships as
-`Hecate.app`: pick a folder, choose what to build, run, and read the checks
-and the per-field evidence trail in a window.
-
-```bash
-./build/build.sh      # freezes and ad-hoc signs dist/Hecate.app
-./build/package.sh    # dist/Hecate.dmg, and how to open it on another Mac
-```
-
-The app calls `main.run(args)` — the same entry point as the command line —
-so the two produce identical output.
-
-**The build environment is not the dev environment.** `build/build.sh` uses
-`.buildvenv`, which must be created from **python.org's framework Python**
-(`/Library/Frameworks/Python.framework`). Two things have to be true at once:
-a non-framework Python cannot open a Cocoa window, so the app would run
-headless forever; and Homebrew's Python is compiled against whatever macOS the
-build machine runs, which produces a bundle that refuses to launch on any
-older Mac. `build.sh` prints the bundle's true minimum macOS after every build
-and warns if it rises.
-
 ### Score against a hand-built reference
 
 ```bash
@@ -139,7 +116,8 @@ The extraction still asserts only the one hop a single file can justify.
 
 Folder names, stage names and the final-stage workbook's filename live in
 `src/layout.py`, not scattered through the code. To point the tool at a
-differently-shaped archive, drop an `archive.json` beside its folders:
+differently-shaped archive, drop an `archive.json` beside its folders
+(`archive.example.json` in this repo is a commented template):
 
 ```json
 {
