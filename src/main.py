@@ -3,6 +3,7 @@ from pathlib import Path
 
 import assemble
 import emit
+import kinds
 from catalog import build_catalog, cloud_sheets, find_cloud_workbook
 from layout import (LayoutError, cloud_stage, final_hop_dir, load_layout,
                     table_prefixes)
@@ -11,13 +12,15 @@ from validate import chain_diagnostics, coverage_metrics
 
 ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_DIR = ROOT / "schemas"
-SCHEMA_FILES = {"hop_spec": "hop_record.json", "cloud_sheet": "cloud_record.json",
-                "view_sql": "view_record.json"}
 
 
+# Which schema file belongs to which source kind is declared once, in
+# kinds.py, beside everything else about that kind. SCHEMA_DIR stays a module
+# global read at call time, because the app corrects it after import: a frozen
+# bundle does not preserve the path main.py computes from its own __file__.
 def load_schemas():
-    return {kind: json.loads((SCHEMA_DIR / name).read_text(encoding="utf-8"))
-            for kind, name in SCHEMA_FILES.items()}
+    return {kind: json.loads((SCHEMA_DIR / filename).read_text(encoding="utf-8"))
+            for kind, filename in kinds.schema_files().items()}
 
 
 def parse_args(argv=None):
@@ -35,7 +38,7 @@ def parse_args(argv=None):
                              "Defaults to archive.json inside the archive, then "
                              "to the built-in layout.")
     parser.add_argument("--table", action="append", default=[], metavar="TABLE",
-                        help="target table to build, e.g. DWH_TEMP_CLIENT. "
+                        help="target table to build, e.g. DWH_TEMP_PARTY. "
                              "Repeatable; omit to build every DWH table found.")
     parser.add_argument("--out", default="output.json")
     parser.add_argument("--xlsx", default="output.xlsx",
@@ -140,8 +143,8 @@ def run(args):
 
     cloud_index = {}
     if cloud_path:
-        # A cloud sheet may drop the warehouse prefix: DWH_FDM_TRAN_HIS is
-        # filed under "FDM_TRAN_HIS". Accept every configured spelling.
+        # A cloud sheet may drop the warehouse prefix: DWH_TXN_HISTORY is
+        # filed under "TXN_HISTORY". Accept every configured spelling.
         wanted = set(targets)
         for prefix in table_prefixes(layout):
             wanted |= {t[len(prefix):] for t in targets if t.startswith(prefix.upper())}

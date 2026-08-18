@@ -1,6 +1,6 @@
 import jsonschema
 
-from assemble import field_key, format_key, stages_in
+from assemble import field_key, format_key, stages_in, target_key
 
 MIN_PLAUSIBLE_COLUMNS = 3
 
@@ -185,8 +185,8 @@ def _counted(items, render):
 #
 # A break shows up in BOTH lists, at the same stage, and the two spellings
 # side by side are the diagnosis: if normalization could have saved them they
-# would already have matched, so whatever differs is real (STG_FDM_TRAN_HIS
-# vs FDM_TRAN_HIS is a different table, not different formatting).
+# would already have matched, so whatever differs is real (STG_TXN_HISTORY
+# vs TXN_HISTORY is a different table, not different formatting).
 #
 # Reported, never errors — a field genuinely ending mid-pipeline looks
 # identical to a break, and only someone who knows the platform can say
@@ -258,11 +258,7 @@ def coverage_metrics(lineage_records, stages=None) -> dict:
         if any(src.get("transformation_logic")
                for entry in record["lineage"] for src in entry["sources"]):
             with_logic += 1
-        last = record["lineage"][-1]
-        key = (last["table"], last["column"]) if last["stage"] != "cloud" else None
-        for entry in record["lineage"]:
-            if entry["stage"] == "dwh":
-                key = (entry["table"], entry["column"])
+        key = target_key(record)
         if key:
             targets[key] = targets.get(key, 0) + 1
     multi_source = sum(1 for n in targets.values() if n > 1)

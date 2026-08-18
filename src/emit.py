@@ -14,17 +14,28 @@ from openpyxl.utils import get_column_letter
 
 from assemble import stages_in
 
-# Fill colour per known stage; an archive with stages we have no colour for
-# still emits, cycling the palette rather than failing.
-STAGE_COLOURS = {"source": "FFE8D6", "staging": "D6E8F5",
-                 "dwh": "DDEEDD", "cloud": "EADCF0"}
+# Fill colour per stage group, taken by the stage's POSITION in the pipeline
+# rather than by its name. This was the last place downstream of assembly that
+# still knew the stage names of one particular archive; everything else reads
+# the stage list off the records (assemble.stages_in).
+#
+# The palette is the old name-to-colour table in pipeline order, so any archive
+# whose stages run source -> staging -> dwh -> cloud emits exactly the fills it
+# did before: those four colours already WERE PALETTE[0..3], in that order.
+#
+# What the hardcoded names actually cost was not a missing colour — an
+# unrecognised stage already fell back to its position — but a collision
+# between the two schemes. The fallback could hand a stage a colour that a
+# *named* stage beside it already owned: stages ["warehouse", "source"] shaded
+# both groups FFE8D6, two adjacent column groups indistinguishable in the one
+# artefact whose whole job is to be read by eye. One scheme cannot contradict
+# itself that way. Beyond the palette's length it cycles rather than failing.
 PALETTE = ["FFE8D6", "D6E8F5", "DDEEDD", "EADCF0", "F5E6CC", "E0E0F0"]
 
 
 def stage_groups(stages) -> list:
     """(display name, stage, fill) per stage, in pipeline order."""
-    return [(stage.replace("_", " ").title(), stage,
-             STAGE_COLOURS.get(stage, PALETTE[i % len(PALETTE)]))
+    return [(stage.replace("_", " ").title(), stage, PALETTE[i % len(PALETTE)])
             for i, stage in enumerate(stages)]
 STAGE_COLS = ["Tên Bảng", "Tên Cột", "Đường Dẫn", "datatype", "size"]
 TAIL_COLS = ["Mô Tả", "transformation logic", "Logic Notes", "Join / Depends-on"]

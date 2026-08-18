@@ -52,6 +52,40 @@ def stages_in(records) -> list:
     return order
 
 
+def target_key(record):
+    """Which entry of a chain identifies the field the record is ABOUT.
+
+    A record spans several stages, so "one target field" needs a rule for
+    which entry names it: the warehouse entry when the chain has one,
+    otherwise the end of the chain — unless the chain ends at the cloud copy,
+    which is the same field landed somewhere else rather than a field of its
+    own. Returns None in that last case, and the caller skips the record.
+
+    This is the single definition, next to field_key and stages_in for the
+    same reason: it was written out twice, verbatim, in validate.py's coverage
+    metrics and in the desktop window's n-1 badges. Two copies of a *counting
+    rule* is worse than two copies of most things — the window and the report
+    show their answers side by side, so any drift between them reads to a
+    reviewer as one of the two being broken.
+
+    Unlike field_key this does NOT normalise. The values go into a count of
+    distinct target fields, and folding case or padding here would silently
+    merge fields the dictionary reports separately.
+    """
+    chain = record.get("lineage") or []
+    if not chain:
+        return None
+    last = chain[-1]
+    key = (last.get("table"), last.get("column")) if last.get("stage") != "cloud" else None
+    # A later warehouse entry wins, matching the order the chain is built in.
+    # "dwh" and "cloud" are the only stage names any of this knows by name;
+    # everything else derives the stage list from the records themselves.
+    for entry in chain:
+        if entry.get("stage") == "dwh":
+            key = (entry.get("table"), entry.get("column"))
+    return key
+
+
 def format_key(key) -> str:
     table, column = key
     return f"{table}.{column}" if table else column
@@ -89,7 +123,7 @@ def _cloud_lookup(cloud_index, table, column, prefixes=()):
     """Cloud detail for a warehouse field.
 
     The cloud workbook files some tables without the warehouse prefix
-    (DWH_FDM_TRAN_HIS is on a sheet called FDM_TRAN_HIS) and others with it,
+    (DWH_TXN_HISTORY is on a sheet called TXN_HISTORY) and others with it,
     so try each configured prefix stripped before giving up.
     """
     names = [table]
@@ -134,7 +168,7 @@ def _walk_back(table, column, catalog, store, depth, seen):
         return []
     # The sheet name is authoritative for the table it describes. The per-row
     # "Target Table Name" cell is often the SOURCE table copied down the
-    # column (STG_FDM_TRAN_HIS.xlsx labels every row "FDM_TRAN_HIS"), and
+    # column (STG_TXN_HISTORY.xlsx labels every row "TXN_HISTORY"), and
     # trusting it breaks the chain at the next hop.
     owner_table = (owner.get("sheet") or "").strip() or table
     # Upstream of a field, take the first mapping. A fan-in further back is
