@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hecate</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="mark"></span>
+    <div>
+      <div class="brand-name">Hecate</div>
+      <div class="brand-sub" data-t="tagline"></div>
+    </div>
+  </div>
+  <button class="lang" id="langToggle">EN</button>
+</header>
+
+<nav class="steps" id="steps">
+  <div class="step" data-step="1"><i>1</i><span data-t="step1"></span></div>
+  <div class="step" data-step="2"><i>2</i><span data-t="step2"></span></div>
+  <div class="step" data-step="3"><i>3</i><span data-t="step3"></span></div>
+</nav>
+
+<main>
+
+  <!-- ── 1. Choose a folder ─────────────────────────────────────────── -->
+  <section class="view" id="view-choose">
+    <div class="hero">
+      <h1 data-t="chooseTitle"></h1>
+      <p class="lede" data-t="chooseLede"></p>
+      <button class="primary big" id="btnChoose" data-t="chooseBtn"></button>
+      <p class="hint" data-t="chooseHint"></p>
+    </div>
+    <div class="explainer">
+      <h3 data-t="whatIsTitle"></h3>
+      <p data-t="whatIsBody"></p>
+    </div>
+  </section>
+
+  <!-- ── 2. Confirm what to build ───────────────────────────────────── -->
+  <section class="view" id="view-scan" hidden>
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2 data-t="scanTitle"></h2>
+          <p class="path" id="scanPath"></p>
+        </div>
+        <span class="badge" id="scanMode"></span>
+      </div>
+
+      <div class="scan-summary" id="scanSummary"></div>
+
+      <div class="picker">
+        <div class="picker-head">
+          <label class="check">
+            <input type="checkbox" id="selectAll" checked>
+            <span data-t="selectAll"></span>
+          </label>
+          <span class="count" id="selCount"></span>
+        </div>
+        <div class="picker-list" id="pickList"></div>
+      </div>
+
+      <div class="notice" id="quotaWarn" hidden>
+        <strong data-t="quotaTitle"></strong>
+        <span data-t="quotaBody"></span>
+      </div>
+
+      <div class="actions">
+        <button class="ghost" id="btnBack" data-t="back"></button>
+        <button class="primary" id="btnRun" data-t="runBtn"></button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 3. Running ─────────────────────────────────────────────────── -->
+  <section class="view" id="view-run" hidden>
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2 id="runHeading" data-t="runTitle"></h2>
+          <p class="lede small" id="runLede" data-t="runLede"></p>
+        </div>
+        <span class="spinner" id="spinner"></span>
+      </div>
+      <pre class="log" id="log"></pre>
+      <div class="actions" id="runActions">
+        <button class="ghost danger" id="btnStop" data-t="stopBtn"></button>
+      </div>
+      <div class="notice" id="stoppedNote" hidden>
+        <strong data-t="stoppedTitle"></strong>
+        <span id="stoppedBody"></span>
+      </div>
+      <div class="actions" id="stoppedActions" hidden>
+        <button class="ghost" id="btnStoppedBack" data-t="back"></button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 4. Results ─────────────────────────────────────────────────── -->
+  <section class="view" id="view-results" hidden>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="grid">
+      <div class="card">
+        <h3 data-t="checksTitle"></h3>
+        <p class="lede small" data-t="checksLede"></p>
+        <div id="checks"></div>
+      </div>
+      <div class="card">
+        <h3 data-t="coverageTitle"></h3>
+        <p class="lede small" data-t="coverageLede"></p>
+        <div id="coverage"></div>
+      </div>
+    </div>
+
+    <div class="card" id="errorCard" hidden>
+      <h3 data-t="problemsTitle"></h3>
+      <ul class="errlist" id="errlist"></ul>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h3 data-t="browseTitle"></h3>
+          <p class="lede small" data-t="browseLede"></p>
+        </div>
+        <input type="search" id="search" class="search">
+      </div>
+      <div class="tablewrap">
+        <table class="fields">
+          <thead>
+            <tr>
+              <th data-t="colTable"></th>
+              <th data-t="colColumn"></th>
+              <th data-t="colType"></th>
+              <th data-t="colDesc"></th>
+              <th data-t="colChain"></th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <div class="table-empty" id="tableEmpty" hidden></div>
+      </div>
+      <div class="tablefoot">
+        <span id="rowInfo"></span>
+        <button class="ghost small" id="btnMore" data-t="showMore" hidden></button>
+      </div>
+    </div>
+
+    <div class="actions end">
+      <button class="ghost" id="btnNewRun" data-t="newRun"></button>
+      <button class="ghost" id="btnFolder" data-t="openFolder"></button>
+      <button class="primary" id="btnExcel" data-t="openExcel"></button>
+    </div>
+  </section>
+
+</main>
+
+<!-- ── Field detail drawer ──────────────────────────────────────────── -->
+<div class="drawer-scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" hidden>
+  <div class="drawer-head">
+    <div>
+      <div class="drawer-title" id="drawerTitle"></div>
+      <div class="drawer-sub" id="drawerSub"></div>
+    </div>
+    <button class="close" id="drawerClose">&times;</button>
+  </div>
+  <div class="drawer-body" id="drawerBody"></div>
+</aside>
+
+<script src="app.js"></script>
+</body>
+</html>
