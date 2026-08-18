@@ -14,20 +14,25 @@ import hashlib
 import json
 from pathlib import Path
 
+import kinds
 from agent import convert
 from extract import (read_excel_df, df_to_text, expected_row_count,
                      read_sql_text, expected_column_count)
 from validate import validate_input, validate_sql_input, validate_output
 
+
 # Which reader turns a source file into the text the agent sees. A spreadsheet
-# has to be flattened into CSV; a .sql file already is text. Each returns
-# (text, expected_count, checkpoint-1 errors), so records() below is the same
-# for every kind.
-EXCEL_KINDS = ("hop_spec", "cloud_sheet")
-
-
+# has to be flattened into CSV; a .sql file already is text. Each branch
+# returns (text, expected_count, checkpoint-1 errors), so records() below is
+# the same for every kind.
+#
+# The branch is chosen by the kind's declared reader rather than by a list of
+# kind names kept here. That list was a fourth place a document type had to be
+# registered, and it is the reader choice that also settles the other two
+# things differing between the branches: which completeness anchor applies
+# (a row count vs a declared column list) and which checkpoint-1 check runs.
 def _read_source(path, sheet, kind):
-    if kind in EXCEL_KINDS:
+    if kinds.get(kind).reader == kinds.EXCEL:
         df = read_excel_df(path, sheet)
         return df_to_text(df), expected_row_count(df, kind), validate_input(df)
     text = read_sql_text(path)

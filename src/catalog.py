@@ -22,8 +22,8 @@ def _table_of(path: Path, non_hop_sheets) -> tuple:
     """(table name, sheet name) for one hop workbook.
 
     The first sheet is named after the table it targets, which is more
-    reliable than the file name ("DWH_TEMP_CLIENT v2.xlsx" holds sheet
-    "DWH_TEMP_CLIENT"). Falls back to the file stem if a sheet is unnamed.
+    reliable than the file name ("DWH_TEMP_PARTY v2.xlsx" holds sheet
+    "DWH_TEMP_PARTY"). Falls back to the file stem if a sheet is unnamed.
     """
     try:
         sheets = pd.ExcelFile(path).sheet_names
@@ -40,8 +40,8 @@ def build_catalog(archive_dir, layout=None) -> dict:
 
     A file whose NAME matches the table always wins over one that merely
     contains a sheet of that name: some workbooks carry a copy-pasted sheet
-    title from another table (STG_CARD_CREDIT_CARD_INFO.xlsx has a sheet
-    called STG_FDM_TRAN_HIS), and resolving through those would silently
+    title from another table (STG_CARD_ACCOUNT_INFO.xlsx has a sheet
+    called STG_TXN_HISTORY), and resolving through those would silently
     read the wrong table's mappings.
     """
     layout = layout or DEFAULT_LAYOUT
@@ -64,7 +64,7 @@ def build_catalog(archive_dir, layout=None) -> dict:
             entry = {"path": str(path), "sheet": sheet, "stage_dir": stage_dir,
                      "from_stage": from_stage, "to_stage": to_stage}
             # A file name may carry a version suffix the sheet does not
-            # ("STG_MDM_CIF_ADDRESS_v1_20240530.xlsx" holds STG_MDM_CIF_ADDRESS).
+            # ("STG_MDM_PARTY_ADDR_v1_20240530.xlsx" holds STG_MDM_PARTY_ADDR).
             stem = path.stem.strip().upper()
             authoritative = stem == table or stem.startswith(table + "_V")
             if authoritative or table not in catalog:

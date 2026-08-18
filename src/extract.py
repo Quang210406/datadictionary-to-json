@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pandas as pd
 
+import kinds
+
 # Read one sheet as a raw grid: drop fully empty rows
 def read_excel_df(path: str, sheet_name=0) -> pd.DataFrame:
     df = pd.read_excel(path, sheet_name=sheet_name, header=None)
@@ -13,15 +15,11 @@ def df_to_text(df: pd.DataFrame) -> str:
     return df.to_csv(index=False, header=False)
 
 
-# Words that must appear in *different* cells of a source kind's
-# column-header row. Deliberately loose: these sheets are hand-maintained
-# and the exact captions vary ("Source column Name", "Column Name", "Field").
-HEADER_ANCHORS = {
-    "hop_spec": (("target",), ("source",)),
-    # Without this the completeness check silently skipped cloud sheets, and
-    # a truncated reply (23 records for a 48-row sheet) passed unnoticed.
-    "cloud_sheet": (("column", "trường"), ("type", "length")),
-}
+# The anchor words themselves now live with the rest of each source kind's
+# definition, in kinds.py — they used to sit here in a HEADER_ANCHORS dict of
+# their own, which is how one of them came to be missing without anything
+# failing. Finding the header row is still this module's job; knowing which
+# words to look for is a property of the document kind.
 
 # A column-header row spans the table; a stray metadata line does not.
 # This is what stops "Source and Target File Name" (one populated cell) in a
@@ -50,7 +48,7 @@ def _is_header_row(cells, anchors) -> bool:
 # Returns None when no header row is recognisable — the caller reports the
 # record count as a metric but does not fail the run on a number it guessed.
 def expected_row_count(df: pd.DataFrame, source_kind: str):
-    anchors = HEADER_ANCHORS.get(source_kind)
+    anchors = kinds.header_anchors(source_kind)
     if anchors is None:
         return None
     for position in range(len(df)):

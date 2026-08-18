@@ -37,7 +37,7 @@ DEFAULT_LAYOUT = {
         "glob": "*Mapping*CLOUD*.xlsx",
         "stage": "cloud",
         # A cloud sheet may file a table without its warehouse prefix:
-        # DWH_FDM_TRAN_HIS appears as FDM_TRAN_HIS. Try each prefix stripped.
+        # DWH_TXN_HISTORY appears as TXN_HISTORY. Try each prefix stripped.
         "table_prefixes": ["DWH_"],
     },
 

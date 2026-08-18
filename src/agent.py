@@ -2,6 +2,8 @@ import os, json
 from dotenv import load_dotenv
 from google import genai
 
+import kinds
+
 # Load GEMINI_API_KEY from the .env file into the environment.
 load_dotenv()
 
@@ -19,6 +21,11 @@ COMMON_RULES = """- One JSON record per data row. Never add, drop, or merge reco
 # is the whole difference between the two: a hop spec row is a mapping
 # between two stages, a DDL sheet row is a column definition. Everything
 # else about the two prompts is shared.
+#
+# The bodies live here, beside the AI code, because they are long and because
+# this is the only module that sends them anywhere. Which kinds exist is not
+# decided here though — kinds.py holds that, and _check_prompts() below
+# reconciles the two at import time.
 PROMPTS = {
     "hop_spec": {
         "label": "hop specification sheet",
@@ -46,7 +53,7 @@ field from more than one source field. That happens two ways:
   (a) the Source Table/Column cell stacks several names on separate lines;
   (b) the cells are blank or partial and the source columns are named only
       inside the transformation/notes prose (e.g. a list of fields checked
-      for null, or "check CONT_TYP = 'CP'").
+      for null, or "check STATUS_CD = 'CP'").
 In both cases emit ONE RECORD PER SOURCE FIELD, all sharing the same
 target_column, rather than one record with stacked values. Take each source
 column name verbatim from the text; if the prose names a table but no column
@@ -121,6 +128,45 @@ ONE COLUMN of that table.
   invent or summarise a description.""",
     },
 }
+
+# The parts of a prompt entry the template below interpolates. Named here so a
+# half-written entry is caught at import rather than at the moment of the API
+# call, which is both the slowest and the most expensive place to find out.
+PROMPT_PARTS = ("label", "heading", "body")
+
+
+def _check_prompts():
+    """Reconcile these prompts with the source kinds registered in kinds.py.
+
+    kinds.py owns which document kinds exist and validates everything else
+    about them, but it cannot check this: it deliberately imports nothing from
+    the project, so that extract.py can read from it without google-genai
+    coming along. The registry therefore checks its own fields, and the module
+    that holds the prompts checks that it has one per registered kind.
+
+    Both directions matter. A kind with no prompt fails the run when it is
+    reached; a prompt with no kind is dead text that reads as though the kind
+    were supported.
+    """
+    missing = sorted(set(kinds.KINDS) - set(PROMPTS))
+    if missing:
+        raise ValueError(
+            f"source kind(s) {missing} are registered in kinds.py but have no "
+            "prompt here; extraction would fail on the first such file.")
+    orphaned = sorted(set(PROMPTS) - set(kinds.KINDS))
+    if orphaned:
+        raise ValueError(
+            f"prompt(s) {orphaned} name no registered source kind; add them to "
+            "kinds.py or remove them, because nothing can reach them.")
+    for name, template in PROMPTS.items():
+        absent = [part for part in PROMPT_PARTS if not template.get(part)]
+        if absent:
+            raise ValueError(
+                f"prompt {name!r} is missing {absent}; the prompt would be "
+                "built with a hole in it.")
+
+
+_check_prompts()
 
 
 # Sends one source file's text to the AI agent, under the prompt for its kind.
