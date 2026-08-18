@@ -40,3 +40,16 @@ sample_data/*.xlsx
 !sample_data/NBA_sample_data.xlsx
 Archive/
 *.sql
+
+# App build (see build/build.sh)
+.buildvenv/
+dist/
+build/hecate/
+build/icon.iconset/
+build/_icon_1024.png
+
+# GENERATED — contains the live API key. Never commit.
+app/bundled_key.py
+
+# Local working notes, not part of the shipped project
+CLAUDE.md
