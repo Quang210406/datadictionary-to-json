@@ -1,8 +1,10 @@
-import os, json
+import json
+import os
+
 from dotenv import load_dotenv
-from google import genai
 
 import kinds
+import providers
 
 # Load GEMINI_API_KEY from the .env file into the environment.
 load_dotenv()
@@ -78,11 +80,11 @@ comes from. That is the lineage you are extracting.
   of them and no others. If the SELECT gives a column a differently-cased
   alias, the DECLARED name still wins.
 - The Nth expression in the SELECT list fills the Nth declared column.
-- "AS" is optional. `D.ADDRESS_FK address_id` aliases just like
-  `D.ADDRESS_FK AS address_id`.
+- "AS" is optional. `D.LOCATION_FK location_id` aliases just like
+  `D.LOCATION_FK AS location_id`.
 
 RESOLVE EVERY NAME TO A REAL TABLE:
-- FROM/JOIN clauses give each table a short alias (`GA65_CM_UAT.address C`).
+- FROM/JOIN clauses give each table a short alias (`CRMDB_UAT.party_addr C`).
   Record the real schema and table, and put the alias in source_alias.
 - A `WITH name AS (SELECT ... FROM real_table ...)` block at the top invents a
   name that is NOT a table. Record the real table it selects from, and note
@@ -97,8 +99,8 @@ WHICH SOURCES TO RECORD — this matters:
 - Record a source when its value can end up in the column (source_role
   "value"), or when a join inside the value-producing expression is how the
   right row was found (source_role "join"). A correlated subquery like
-  (SELECT Name FROM gen_para WHERE id = C.address_type) gives TWO records:
-  gen_para's real table with role "value", and C.address_type with role
+  (SELECT Name FROM code_lookup WHERE id = C.location_type) gives TWO records:
+  code_lookup's real table with role "value", and C.location_type with role
   "join".
 - Do NOT emit records for FROM-clause or WHERE-clause joins and filters.
   Those restrict which rows the view returns; they do not supply a column's
@@ -110,6 +112,92 @@ WHICH SOURCES TO RECORD — this matters:
 - When a column's value comes from a function call rather than a column
   (`SOME_TAT(a.id)`), leave source_table and source_column null and put the
   call in transformation_logic. Do not invent a table for it.""",
+    },
+    "table_sql": {
+        "label": "CREATE TABLE ... AS SELECT script",
+        "heading": "TABLE SOURCE CODE",
+        "body": """This file creates ONE table from a query (CREATE TABLE ... AS SELECT, often
+called CTAS). The table stores its result, unlike a view, but for lineage
+that difference does not matter: the SELECT states exactly where each column
+comes from, and that is what you are extracting.
+
+- If a bracket after the table name declares the output columns, those names,
+  spelled exactly as declared there, are the target_column values, and the
+  declared list is the authoritative set: emit records covering every one of
+  them and no others.
+- If there is NO declared bracket, the SELECT list names the columns. Use the
+  alias where one is given (`a.PARTY_NO AS customer_id` -> "customer_id"),
+  otherwise the column's own name (`a.PARTY_NO` -> "PARTY_NO").
+- `SELECT *` names no columns at all. Emit one record per source column you
+  can actually see named in the script, and never invent a column name to
+  fill the gap — a guessed column is worse than a missing one.
+- The Nth expression in the SELECT list fills the Nth declared column.
+- "AS" is optional. `D.LOCATION_FK location_id` aliases just like
+  `D.LOCATION_FK AS location_id`.
+
+RESOLVE EVERY NAME TO A REAL TABLE:
+- FROM/JOIN clauses give each table a short alias (`CRMDB_UAT.party_addr C`).
+  Record the real schema and table, and put the alias in source_alias.
+- An inline view — a `(SELECT ... FROM real_table) A` in the FROM clause —
+  invents a name that is NOT a table. Record the real table it selects from.
+- A `WITH name AS (SELECT ... FROM real_table ...)` block does the same.
+  Record the real table, and note the block's filter in transformation_logic.
+
+ONE RECORD PER (target column, source field). A column fed by several sources
+produces several records sharing one target_column — a COALESCE of two
+lookups gives one record per lookup, a concatenation gives one record per
+column concatenated, a CASE gives one record per column it reads.
+
+WHICH SOURCES TO RECORD — this matters:
+- Record a source when its value can end up in the column (source_role
+  "value"), or when a join inside the value-producing expression is how the
+  right row was found (source_role "join").
+- Do NOT emit records for FROM-clause or WHERE-clause joins and filters.
+  Those restrict which rows are loaded; they do not supply a column's value.
+  Mention them in transformation_logic if they matter.
+
+- target_table is the table being created, spelled as the CREATE TABLE line
+  writes it.
+- transformation_logic is the expression as written: "direct" for a plain
+  column reference, otherwise the CASE, COALESCE, concatenation or function
+  call copied verbatim.
+- When a column's value comes from a function call rather than a column,
+  leave source_table and source_column null and put the call in
+  transformation_logic. Do not invent a table for it.""",
+    },
+    "doc_prose": {
+        "label": "system or database design document",
+        "heading": "DOCUMENT TEXT",
+        "body": """This is prose — a design document, a specification, a user guide — not a
+spreadsheet and not code. It was written for people, so most of it is not
+about individual fields at all.
+
+Extract ONLY what the document actually DEFINES about a data field: its
+business meaning. One record per (table, column) the text genuinely explains.
+
+- If the document has a data-dictionary or field-listing section — often a
+  table with columns like "Tên trường", "Kiểu dữ liệu", "Mô tả" — that is the
+  richest source. Take the field name and its description as written.
+- A field explained in a sentence counts too ("CUST_STATUS cho biết trạng
+  thái hoạt động của khách hàng"). Copy the explanation as the description.
+- Prose that merely MENTIONS a field without saying what it means is not a
+  definition. Skip it. A screenshot caption, a step in a user guide, or a
+  field named in a list of things to fill in is not a description.
+
+- table is the table the field belongs to, when the document says so — a
+  section heading, a table caption, or the surrounding text. Use null when
+  the document names a field but never says which table it is in. Do NOT
+  guess a table from the field's name.
+- section is where in the document you found it: the nearest heading, table
+  caption, or the page marker ("--- trang 42 ---") if nothing else names the
+  place. This is the evidence trail; be specific rather than tidy.
+- description is the document's own wording, copied. Do not summarise it, do
+  not translate it, do not improve it. If the document is in Vietnamese the
+  description stays in Vietnamese.
+
+Emit an empty array if the document defines no fields at all. That is a
+truthful answer and a common one — most pages of most documents define
+nothing.""",
     },
     "cloud_sheet": {
         "label": "DWH-to-CLOUD reference sheet",
@@ -190,13 +278,7 @@ Rules:
 {template['heading']}:
 {text}"""
 
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-    response = client.models.generate_content(
-        model="gemini-3.5-flash",
-        contents=prompt,
-    )
-
-    raw = response.text.strip()
-    if raw.startswith("```"):
-        raw = raw.strip("`").removeprefix("json").strip()
-    return json.loads(raw)
+    # Which model answers is configuration, not code — see providers.py. The
+    # default is still Gemini through its own client, which is the path every
+    # published number was measured through.
+    return providers.parse_json_array(providers.complete(prompt))
