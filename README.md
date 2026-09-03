@@ -1,208 +1,258 @@
 # Hecate
 
-Builds a data dictionary — every field, where it came from, and how it was
-transformed — from documentation that was never designed to be machine-read.
+Builds a **data dictionary** — every field, where it came from, how it was
+transformed, and **which file said so** — out of documentation that was never
+designed to be machine-read.
 
-An AI agent reads each messy source file into flat records; plain Python joins
-those records into lineage. **That split is the point of the design**: when a
-result is wrong you can tell whether extraction or assembly caused it, and the
-joins can be trusted because they were computed, not generated.
+Point it at a folder of spreadsheets, SQL scripts and PDFs. It reads each one,
+works out how a field travels from a source system through staging into a
+warehouse, and writes the result as JSON you can process and a spreadsheet a
+person can review next to the originals.
 
----
-
-## The problem
-
-A data platform moves a field through stages — a source system, a staging
-layer, a warehouse, a cloud copy — and each hop is documented separately.
-
-**Documentation is organised per table, not per stage.** There is no
-"source-to-staging document"; there are 74 of them, one per table. A single
-field's journey spans three or four workbooks, none of which references the
-others.
-
-**The files are hand-maintained, so they are inconsistent.** Real examples: 13
-rows of metadata above the actual column header; a "Transformation Type" column
-empty in 97.6% of rows while the real rule sits in a "Notes" column; row cells
-naming the *source* table under a *target* heading; several source tables
-stacked in one cell; business rules written as prose.
-
-**Datatypes change along the way** — in about 10% of rows the type or size
-differs between the two ends of a single hop.
-
-By hand, one field takes minutes. There are thousands of fields.
+An AI reads each messy file into flat records; plain Python joins those records
+into lineage. Each AI call sees exactly **one** file, so a value can be checked
+character-for-character against the file it came from, and a cross-file link
+cannot be invented. How that works is in [docs/DESIGN.md](docs/DESIGN.md).
 
 ---
 
-## Quick start
+## What it does
+
+| | |
+|---|---|
+| **Reads** | Excel (`.xlsx`), SQL (`CREATE VIEW`, `CREATE TABLE … AS SELECT`), and — with an optional package — PDF, Word, PowerPoint, HTML, including scanned pages via OCR |
+| **Builds** | field-level lineage across a multi-stage pipeline, or inside a single SQL file |
+| **Explains a folder** | reports what is actually in an unfamiliar folder and *proposes* a layout for it |
+| **Models** | `Table`, `Column`, `Lineage` as real types, not loose dictionaries |
+| **Collects meanings** | exports a sheet for a person to fill in, reads field meanings out of PDFs, joins both |
+| **Documents itself** | generates a table of where each attribute is found, per document format |
+| **Checks itself** | six checks per run, including one that proves no value was invented |
+| **Runs on any model** | Gemini, OpenAI, Claude, Mistral, or Ollama on your own machine |
+| **Scores itself** | compares its output against a dictionary built by hand |
+
+Measured against hand-built dictionaries: **98.4%** field accuracy on an Excel
+archive, **99.3%** on SQL views.
+
+---
+
+# Quick start
+
+## 1. What you need
+
+- **Python 3.9 or newer** (3.12 recommended). Check with `python3 --version`.
+- **An API key** for one AI provider. A free Google Gemini key takes two
+  minutes at [aistudio.google.com](https://aistudio.google.com).
+- A folder of documentation to point it at.
+
+## 2. Install
 
 ```bash
-pip install pandas openpyxl jsonschema python-dotenv google-genai
+git clone https://github.com/Quang210406/datadictionary-to-json.git
+cd datadictionary-to-json
+python3 -m venv .venv
+.venv/bin/pip install pandas openpyxl jsonschema python-dotenv google-genai
 ```
 
-`.env` in the project root:
+## 3. Give it a key
+
+Create a file called `.env` in the project root:
 
 ```
 GEMINI_API_KEY=your-key-here
 ```
 
-### Excel archive
+## 4. Check it works
 
 ```bash
-python src/main.py --archive path/to/archive --table TARGET_TABLE
+.venv/bin/python tests/test_no_cloud_stage.py
 ```
 
-Omit `--table` to build every table produced by the last hop.
+Should print `8/8 passed`. This needs **no API key and no network**, so a pass
+means the install is sound before you spend anything.
 
-### SQL views
+## 5. First real run
 
 ```bash
-python src/main.py --sql path/to/sql/folder --out views.json --xlsx views.xlsx
+.venv/bin/python src/main.py --archive path/to/your/archive
 ```
 
-### Score against a hand-built reference
+Everything lands in `out/`. The first run is slow because each file is sent to
+the model; later runs are near-instant because every extraction is cached by
+file **content**.
+
+## 6. Optional — read PDFs and Word documents
 
 ```bash
-python src/compare.py ground_truth.xlsx output.json          # Excel mode
-python src/compare.py ground_truth.xlsx views.json --views   # SQL mode
+.venv/bin/pip install pypdf      # 0.4 MB — PDF text layer
+.venv/bin/pip install docling    # ~1 GB  — adds Word, PowerPoint and OCR
 ```
 
-Extractions are cached **by file content**, so re-runs are free, a run that
-failed part-way retries only what failed, and a cache stays valid when the
-project moves machine.
+Neither is required. Install one and PDFs start working; install `docling` and
+it takes over automatically, adding `.docx`, `.pptx`, `.html` and scanned
+pages. **No code change and no flag** — the program checks what is installed.
 
----
+## 7. Optional — use a model other than Gemini
 
-## The two modes
-
-| | Excel archive | SQL views |
-|---|---|---|
-| Lineage lives | across many files | inside one file |
-| Stages | 4: source → staging → dwh → cloud | 2: source → view |
-| Resolution | walks a catalog backwards | reads one file |
-| n→1 | rare | normal |
-| Datatype/size | stated at both ends of each hop | not stated at all |
-
-### How Excel mode resolves a field
-
-The archive stores one workbook **per table**, so a stage is not a file you can
-name. The program indexes every table first, then walks each field backwards:
-
-    open the file that owns the target table
-    read the row -> it names a source table and column
-    look that source table up in the index
-    open the file that owns IT, read its row for that column
-    repeat until no file owns the table -> that is the origin
-    finally look the target up in the final-stage workbook
-
-Walking *backwards* is what makes this reliable. Each row's "Target Table Name"
-cell frequently holds the source table copied down the column; because
-resolution arrives at each file by name lookup and only reads its *source*
-side, that unreliable cell is never consulted. **The sheet name is
-authoritative, the row cell is not.**
-
-### How SQL mode resolves a view
-
-A view stores no data — it is a saved query — so its definition states exactly
-where each column comes from. One file is the whole lineage: read the declared
-column list, then read the SELECT expression filling each one.
-
-Where a view reads another view, `chain_views()` follows it to the physical
-origin and records that as `resolved_source` rather than lengthening the chain.
-The extraction still asserts only the one hop a single file can justify.
-
----
-
-## Configuring a different archive
-
-Folder names, stage names and the final-stage workbook's filename live in
-`src/layout.py`, not scattered through the code. To point the tool at a
-differently-shaped archive, drop an `archive.json` beside its folders
-(`archive.example.json` in this repo is a commented template):
-
-```json
-{
-  "stages": ["source", "staging", "dwh", "cloud"],
-  "hops": [
-    {"dir": "SRC_STGDIH",    "from": "source",  "to": "staging"},
-    {"dir": "STGDIH_DWHDIH", "from": "staging", "to": "dwh"}
-  ],
-  "cloud": {"glob": "*Mapping*CLOUD*.xlsx", "stage": "cloud",
-            "table_prefixes": ["DWH_"]},
-  "non_hop_sheets": ["DDL"]
-}
+```bash
+.venv/bin/pip install litellm
+export HECATE_PROVIDER=anthropic        # or openai, mistral, ollama
+export ANTHROPIC_API_KEY=your-key
 ```
 
-Resolution order: `--layout FILE` → `archive.json` inside the archive → the
-built-in default. A layout naming a stage that does not exist is rejected with
-a message rather than quietly producing unrecognised stage labels.
-
-Everything downstream — the spreadsheet's column groups, the coverage metrics,
-the comparison offsets — derives the stage list from the **records themselves**,
-so a five-stage archive needs no further changes.
+`HECATE_MODEL` overrides the model. Without `litellm`, Gemini still works.
 
 ---
 
-## Modules
+# Usage
 
-Read in this order; it is also the order data flows.
+## Build a dictionary from an Excel archive
 
-| Module | Role | AI? |
-|---|---|---|
-| `layout.py` | What shape is this archive | no |
-| `catalog.py` | Indexes the archive: `{table → file, sheet, stages}` | no |
-| `extract.py` | Sheet → CSV, or `.sql` → text. Finds the completeness anchor | no |
-| `agent.py` | **The only AI.** One prompt per source kind | **yes** |
-| `store.py` | Converts a file on demand, caches it, isolates failures | no |
-| `assemble.py` | Builds lineage: `resolve_table`, `resolve_view`, `chain_views` | no |
-| `validate.py` | Every check and every number | no |
-| `emit.py` | Writes the reviewable spreadsheet | no |
-| `compare.py` | Scores output against a hand-built reference | no |
-| `main.py` | Orchestration only | no |
+```bash
+python src/main.py --archive path/to/archive
+python src/main.py --archive path/to/archive --table DWH_PARTY --table DWH_ACCOUNT
+```
 
-### Functions that carry weight
+Omit `--table` to build every table produced by the last hop. Each table costs
+API calls, so start with one or two.
 
-**`catalog.build_catalog(dir, layout)`** — a file whose *name* matches the table
-beats one that merely contains a *sheet* of that name; some workbooks carry a
-copy-pasted sheet title from another table, and resolving through those silently
-reads the wrong table. Stamps each entry with its own stage names, so assembly
-never looks up a folder.
+## Build from SQL scripts
 
-**`extract.expected_row_count`** / **`extract.declared_view`** — the
-completeness anchors. A spreadsheet says how many rows it has; a view declares
-how many columns. Without these the completeness check is silently skipped.
+```bash
+python src/main.py --sql path/to/sql/folder
+```
 
-**`store.RecordStore.records(path, sheet, kind)`** — the whole interface between
-assembly and anything expensive. In-memory memo, then disk cache, then extract
-and convert. On one real run assembly asked for a file's rows **19 times and it
-was read 3 times**. A failed conversion is recorded and returns `[]`: one
-transient API error must not destroy a 90-file run.
+Quote the path if it contains spaces. Each `.sql` file is classified by the
+statement it opens with; anything unrecognised is reported and skipped without
+costing a call.
 
-**`assemble.field_key(table, column)`** — the single definition of "the same
-field". Strips and upper-cases **for matching only**; emitted values keep the
-source's own spelling and padding.
+## Point it at a folder it does not recognise
 
-**`assemble.stages_in(records)`** — the stage list, read off the records. Emit,
-compare and coverage all use it, so none of them needs to be told the shape.
+```bash
+python src/main.py --survey path/to/folder --survey-out archive.json
+python src/main.py --archive path/to/folder --layout archive.json
+```
+
+The survey **reports facts** — which subfolders, how many workbooks, which
+table each describes — and then **proposes** a layout with the evidence for
+each part. It never applies one: a wrong stage *order* passes every check this
+program has and produces a confidently wrong pipeline. Read the proposal,
+especially the order, before using it.
+
+Costs nothing: it reads folder and sheet **names**, never a cell.
+
+You can also write the layout by hand — `archive.example.json` is a commented
+template. Resolution order is `--layout FILE` → `archive.json` inside the
+archive → a built-in default.
+
+## Fill in field meanings
+
+The program only ever **copies** a description when a document states one.
+Where nothing states a meaning, the field is blank — that is the gap a person
+fills.
+
+```bash
+# 1. export one row per distinct field
+python src/main.py --archive DIR --describe-template mo_ta.xlsx
+
+# 2. open mo_ta.xlsx, fill the "Mô Tả (bổ sung)" column, save
+
+# 3. read it back in
+python src/main.py --archive DIR --descriptions mo_ta.xlsx
+```
+
+One description per **field**, not per record — a field fed by ten sources is
+ten rows in the output but has one meaning, and it fans out automatically.
+Matching is by table and column, so you can sort and filter the sheet freely,
+and case or stray spaces will not break it. A row matching no field is reported
+as orphaned and kept, never silently dropped.
+
+Your text is **never written into `output.json`**, which holds only what the
+source documents state. It is joined into the spreadsheet instead.
+
+## Read meanings out of PDFs
+
+```bash
+python src/main.py --archive DIR --from-docs path/to/documents \
+                   --describe-template mo_ta.xlsx
+```
+
+Reads each prose document on its own, extracts what it says a field **means**,
+matches those meanings to fields this dictionary actually has, and pre-fills the
+template. Every pre-filled row names the document **and the section** it came
+from, so a reviewer can tell a machine-read meaning from a hand-written one.
+
+Meanings for fields this run did not build are reported, not dropped — a design
+document describes the whole system, and most of it is about other tables.
+
+## Document where each attribute comes from
+
+```bash
+python src/main.py --rules-doc rules.xlsx
+```
+
+Writes a table of **entity | attribute | format | insight type | where it is
+found** — "the sheet name, never the row cell", "the declared column list in
+the bracket after the view name". Needs no archive and no API call: it
+describes the formats, not a run.
+
+## Score against a hand-built reference
+
+```bash
+python src/compare.py ground_truth.xlsx out/output.json          # Excel mode
+python src/compare.py ground_truth.xlsx out/views.json --views   # SQL mode
+```
+
+Turns "does it work?" into a number per column. Writes `out/compare.json`,
+overwriting the previous comparison — read one before running the other.
+
+## Every option
+
+| Flag | What it does |
+|---|---|
+| `--archive DIR` | build from an Excel archive |
+| `--sql DIR_OR_FILE` | build from SQL scripts |
+| `--table NAME` | which table to build; repeatable; omit for all |
+| `--layout FILE` | describe a differently-shaped archive |
+| `--survey DIR` | report a folder's contents and propose a layout |
+| `--survey-out FILE` | save that proposal |
+| `--describe-template FILE` | export the field-description sheet |
+| `--descriptions FILE` | read a filled-in sheet back |
+| `--from-docs DIR_OR_FILE` | read field meanings out of prose documents |
+| `--rules-doc FILE` | write the extraction-rules table |
+| `--out` / `--xlsx` / `--report` | override output paths |
+| `--cache FILE` | the extraction cache; delete it to force re-reading |
+
+Output paths default per mode — `out/output.*` for an archive, `out/views.*`
+for SQL, each with its own cache. **Neither command needs an output flag**, and
+neither mode can overwrite the other's files.
 
 ---
 
-## Output
+## What comes out
+
+Three files per run, in `out/`:
+
+| File | What it is |
+|---|---|
+| `output.json` | the dictionary, for machines |
+| `output.xlsx` | the same records laid out for review by eye |
+| `report.json` | per-file validation, coverage, chain diagnostics, failures |
 
 **One record is one (target field, source field) pair** — not one target field.
 That is what lets a field with ten sources exist as ten records sharing a
-target, instead of values stuffed into one cell.
+target, instead of ten values stuffed into one cell.
 
 ```json
 { "description": "business meaning, when a source states one",
   "lineage": [
-    { "stage": "staging", "table": "...", "column": "...",
-      "datatype": "NUMERIC", "size": "6",
+    { "stage": "staging", "table": "STG_PARTY", "column": "OPEN_DT",
+      "datatype": "DATE", "size": "8",
       "offline_path": "which file said so",
       "sources": [] },
-    { "stage": "dwh", "table": "...", "column": "...",
-      "datatype": "VARCHAR2", "size": "8",
+    { "stage": "dwh", "table": "DWH_PARTY", "column": "OPEN_DT",
+      "datatype": "DATE", "size": "8",
       "offline_path": "which file said so",
-      "sources": [ { "table": "...", "column": "...",
+      "sources": [ { "table": "STG_PARTY", "column": "OPEN_DT",
                      "transformation_logic": "the rule as written",
                      "role": "value" } ] }
   ] }
@@ -210,60 +260,33 @@ target, instead of values stuffed into one cell.
 
 `offline_path` on each entry is the evidence trail. `sources` hangs off the
 stage that was *produced*; the origin stage has an empty list. `role`
-distinguishes a value source from a table joined only to locate the row, or a
-column tested by a rule but never copied.
+distinguishes a value source from a table joined only to locate the row.
 
-Three files per run: **`output.json`** (the dictionary), **`output.xlsx`** (same
-records, laid out for review by eye), **`report.json`** (per-file validation,
-coverage, chain diagnostics, failures). The JSON and the spreadsheet are
-siblings written from the same in-memory list.
+To work with the output as types rather than dictionaries:
 
----
+```python
+from entities import records_from
+records = records_from(json.load(open("out/output.json")))
+records[0].description
+records[0].lineage[-1].sources[0].role
+```
 
-## Checks
 
-| Check | Question | Fatal |
-|---|---|---|
-| Input | Does the file have data / a SELECT? | yes |
-| Shape | Does the agent's reply match the schema? | yes |
-| Completeness | distinct target fields == input rows (or declared columns)? | yes |
-| Fidelity | Does every table/column name appear verbatim in the source text? | yes |
-| Coverage | How much got filled, per stage? | no |
-| Chain diagnostics | Where did a chain start or stop early? | no |
 
-**Fidelity is the strongest guarantee.** Every identifier is checked
-character-for-character against the text the agent was given. Because each call
-sees exactly one file, an invented cross-file link is impossible by construction
-and an invented name is caught mechanically on every run.
+## Limitations
 
-**Completeness counts distinct target fields, not records** — one input row can
-legitimately produce several records under n→1. The report gives
-`fields_covered` and `records_emitted` separately, because a metric that isn't
-the thing being checked trains people to ignore the report.
-
-The last two are reported and never fail a run. A gap is often the honest
-answer, and only someone who knows the platform can say whether a blank is a
-defect — so the tool quantifies it and leaves the call to a person.
+- **Descriptions are copied, never generated.** Where no source states a
+  meaning the field is `null`. Fill it by hand or from a document.
+- **A `CREATE TABLE … AS SELECT *` cannot be completeness-checked.** It declares
+  no column list, and deriving one would need a second file. Reported
+  explicitly rather than skipped.
+- **OCR on scanned pages drops Vietnamese diacritics.** Text comes out
+  readable, but identifiers from a scan are low-confidence.
+- **A layout is still required** for an archive. The survey proposes one, but
+  nothing is inferred silently.
+- **Gaps are counted, never judged.** A blank is often the truthful answer, and
+  only someone who knows the platform can say whether it is a defect.
 
 ---
 
-## Accuracy
-
-Scored against dictionaries built by hand from the same source files.
-
-| | Rows matched | Field accuracy |
-|---|---|---|
-| Excel archive | 20/20 | **98.4%** |
-| SQL views | 24/24 | **99.3%** |
-
-On the SQL side, all 16 views extracted with **2492/2492 fidelity** and every
-declared column covered.
-
----
-
-## Known gaps
-- **`lineage.json` is not enforced** — the assembled output has no schema check.
-- **`DWH_TEMP_PARTY v2.xlsx`** yields 54 distinct target fields from 56 rows;
-  two go missing. Not yet investigated.
-- **Extraction depends on API quota.** Failed files are reported and the run
-  continues with a partial dictionary rather than nothing.
+Design and internals: [docs/DESIGN.md](docs/DESIGN.md)

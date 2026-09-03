@@ -22,7 +22,9 @@ sample_data/*.xlsx
 Archive/
 *.sql
 
-# Generated at runtime
+# Generated at runtime. Everything a run writes goes to out/; the bare names
+# below are older runs' artefacts, kept ignored so an existing checkout does
+# not suddenly show eight untracked files.
 .cache/
 out/
 output.json
@@ -47,3 +49,10 @@ introduction.md
 introduction.pdf
 requirements.txt
 .env.example
+
+# Local working plan, not part of the shipped project
+PLAN.md
+
+# Files prepared for a reviewer. They carry real table and column names, which
+# is exactly what must never reach this repo — it is public.
+deliverables/
