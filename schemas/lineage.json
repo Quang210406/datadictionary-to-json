@@ -1,5 +1,5 @@
 {
-  "$comment": "The final assembled shape: one record per field, tracing that field through every stage. Not an agent output — assemble.py builds it in plain Python from hop_record + ddl_record. 'sources' is a list per field: 1-1 means length 1 (0 at the stage where the field originates), and n-1 later means length > 1 without a shape change.",
+  "$comment": "The final assembled shape: one record per (target field, source field) pair, tracing that field through every stage. Not an agent output — assemble.py builds it in plain Python from the per-file extractions. 'sources' is a list per stage entry: it is empty at the stage where the field originates, length 1 for a 1-1 mapping, and length > 1 where the sheet names several sources without a shape change. src/entities.py mirrors this file field for field and reconciles itself against it at run time, so the two cannot drift apart again — they did, for weeks, while nothing loaded this file.",
   "type": "array",
   "items": {
     "type": "object",
@@ -11,6 +11,7 @@
           "type": "object",
           "properties": {
             "stage":        { "type": "string" },
+            "schema":       { "type": ["string", "null"] },
             "table":        { "type": ["string", "null"] },
             "column":       { "type": ["string", "null"] },
             "datatype":     { "type": ["string", "null"] },
@@ -21,18 +22,23 @@
             "sources": {
               "type": "array",
               "items": {
+                "$comment": "Two shapes share this definition. A hop specification names a table and a column and has no concept of a schema or an alias, so an archive source carries neither key; a SQL source states both, as null where the statement does not say. 'schema' and 'alias' are therefore optional rather than nullable-and-required — the difference is 'this kind of source has no such thing' versus 'it has one and it is empty', and flattening the two would add null keys to 83 published archive records.",
                 "type": "object",
                 "properties": {
+                  "schema":               { "type": ["string", "null"] },
                   "table":                { "type": ["string", "null"] },
                   "column":               { "type": ["string", "null"] },
+                  "alias":                { "type": ["string", "null"] },
                   "transformation_type":  { "type": ["string", "null"] },
-                  "transformation_logic": { "type": ["string", "null"] }
+                  "transformation_logic": { "type": ["string", "null"] },
+                  "role":                 { "type": ["string", "null"] }
                 },
                 "required": [
                   "table",
                   "column",
                   "transformation_type",
-                  "transformation_logic"
+                  "transformation_logic",
+                  "role"
                 ],
                 "additionalProperties": false
               }
@@ -41,6 +47,18 @@
           "required": ["stage", "table", "column", "sources"],
           "additionalProperties": false
         }
+      },
+      "resolved_source": {
+        "$comment": "Present only on a SQL record whose source was itself a view, and only after chain_views has followed it. Recorded beside the chain rather than as extra stages: the extraction asserts one hop, which is what a single file can prove, so following the hop is a separate deterministic step and gets a separate field.",
+        "type": ["object", "null"],
+        "properties": {
+          "schema": { "type": ["string", "null"] },
+          "table":  { "type": ["string", "null"] },
+          "column": { "type": ["string", "null"] },
+          "via":    { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["schema", "table", "column", "via"],
+        "additionalProperties": false
       }
     },
     "required": ["lineage"],
