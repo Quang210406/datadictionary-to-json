@@ -1,0 +1,15 @@
+{
+  "$comment": "What a prose document (PDF, Word) states about a field's MEANING. Not lineage: a design document says what a column is for, not which staging table it came from. One record per (table, column) the document actually defines. 'section' records where in the document the definition was found — the heading or table caption — because the deliverable this feeds asks not just what a document says but which part of it said so.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "table":       { "type": ["string", "null"] },
+      "column":      { "type": "string" },
+      "description": { "type": "string" },
+      "section":     { "type": ["string", "null"] }
+    },
+    "required": ["table", "column", "description", "section"],
+    "additionalProperties": false
+  }
+}
