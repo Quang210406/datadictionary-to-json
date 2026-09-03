@@ -18,7 +18,7 @@ import pandas as pd
 from layout import DEFAULT_LAYOUT, hop_dirs, stages_of_dir
 
 
-def _table_of(path: Path, non_hop_sheets) -> tuple:
+def table_of(path: Path, non_hop_sheets) -> tuple:
     """(table name, sheet name) for one hop workbook.
 
     The first sheet is named after the table it targets, which is more
@@ -55,7 +55,7 @@ def build_catalog(archive_dir, layout=None) -> dict:
         for path in sorted(folder.glob("*.xlsx")):
             if path.name.startswith("~$"):
                 continue
-            table, sheet = _table_of(path, non_hop_sheets)
+            table, sheet = table_of(path, non_hop_sheets)
             if not table:
                 continue
             # The stage names are stamped on here, so assembly reads them off
