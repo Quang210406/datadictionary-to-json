@@ -19,7 +19,7 @@ from collections import Counter
 
 import pandas as pd
 
-from assemble import field_key, stages_in
+from assemble import field_key, produced_entry, stages_in
 
 # Each stage group occupies five columns in the manual sheet, in pipeline
 # order. The stage list is read from the output being scored, so a manual
@@ -173,7 +173,7 @@ def main():
         for m in result["mismatches"][:15]:
             print(f"  {m['row']}\n     {m['column']}: manual={m['manual']!r} "
                   f"program={m['program']!r}")
-    json.dump(result, open("compare.json", "w"), indent=2, ensure_ascii=False)
+    json.dump(result, open("out/compare.json", "w"), indent=2, ensure_ascii=False)
     print("\nWrote compare.json")
 
 
@@ -236,8 +236,11 @@ def read_output_views(path) -> dict:
     records = json.loads(open(path, encoding="utf-8").read())
     rows = {}
     for record in records:
-        by_stage = {e["stage"]: e for e in record["lineage"]}
-        view = by_stage.get("view")
+        # Same rule as emit: the produced object is the end of the chain.
+        # Scoring by the name "view" would silently drop every record a
+        # different statement kind produced, and dropping rows RAISES the
+        # accuracy percentage — the one failure mode a score must not have.
+        view = produced_entry(record)
         if not view:
             continue
         source = (view.get("sources") or [{}])[0]

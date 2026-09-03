@@ -15,10 +15,12 @@ import json
 from pathlib import Path
 
 import kinds
+import readers
 from agent import convert
 from extract import (read_excel_df, df_to_text, expected_row_count,
                      read_sql_text, expected_column_count)
-from validate import validate_input, validate_sql_input, validate_output
+from validate import (validate_document_input, validate_input,
+                      validate_sql_input, validate_output)
 
 
 # Which reader turns a source file into the text the agent sees. A spreadsheet
@@ -32,12 +34,22 @@ from validate import validate_input, validate_sql_input, validate_output
 # things differing between the branches: which completeness anchor applies
 # (a row count vs a declared column list) and which checkpoint-1 check runs.
 def _read_source(path, sheet, kind):
-    if kinds.get(kind).reader == kinds.EXCEL:
+    reader = kinds.get(kind).reader
+    if reader == kinds.EXCEL:
         df = read_excel_df(path, sheet)
         return df_to_text(df), expected_row_count(df, kind), validate_input(df)
+    if reader == kinds.DOCUMENT:
+        # Whichever reader is installed and best for this format — see
+        # readers.py. There is no completeness anchor: nothing in a design
+        # document states how many field definitions it ought to contain, so
+        # the count is reported as "not checked" rather than invented.
+        text = readers.read(path)
+        return text, None, validate_document_input(text)
     text = read_sql_text(path)
-    # A view's completeness anchor is its declared column list, not a row count.
-    return text, expected_column_count(text), validate_sql_input(text)
+    # A SQL object's completeness anchor is its declared column list, not a row
+    # count. The kind goes to checkpoint 1 as well, so a file about to be read
+    # under one prompt cannot turn out to hold a different statement.
+    return text, expected_column_count(text), validate_sql_input(text, kind)
 
 
 class RecordStore:

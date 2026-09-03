@@ -62,11 +62,79 @@ def expected_row_count(df: pd.DataFrame, source_kind: str):
     return None
 
 
-# ---------------------------------------------------------------- SQL views
+# ------------------------------------------------------------------ SQL
 
-# The declared column list of a CREATE VIEW. View names contain spaces, so the
-# name is matched as a quoted string OR a bare token before the "(".
-VIEW_HEADER = re.compile(r'VIEW\s+("(?:[^"]+)"|\S+)\s*\((.*?)\)\s*AS\s', re.S | re.I)
+# Comments, both dialects. Stripped before anything else looks at a .sql file:
+# every real script in the archive opens with a "-- DDL for View X" banner, so
+# the statement is never the first thing in the file, and a pattern that
+# ignored comments would either have to hunt for the statement anywhere in the
+# text or find nothing at all. Hunting is the dangerous half — a CREATE VIEW
+# written inside a comment would then classify the file.
+SQL_COMMENT = re.compile(r"--[^\n]*|/\*.*?\*/", re.S)
+
+
+def strip_sql_comments(text: str) -> str:
+    """The script with its comments blanked out.
+
+    Replaced with a space rather than deleted, so `CREATE/*x*/VIEW` cannot be
+    welded into one token and two words never become one.
+    """
+    return SQL_COMMENT.sub(" ", text or "")
+
+
+# Oracle writes a pile of modifiers between CREATE and the object keyword
+# ("CREATE OR REPLACE FORCE EDITIONABLE VIEW"), and splits the line wherever
+# it likes — one real file has CREATE alone on line 4 and the rest on line 5.
+# So: bare words and whitespace only, non-greedy, and bounded. Bounded matters
+# — an unbounded run would let a CREATE at the top of the file reach a TABLE
+# far below it and classify on a pairing that is not a statement at all.
+# Overshooting the bound fails CLOSED: the file is unrecognised, checkpoint 1
+# rejects it and nothing is spent on it.
+MAX_STATEMENT_MODIFIERS = 6
+
+
+def _statement_pattern():
+    """Built from the registry, so a new kind needs no edit here.
+
+    Rebuilt per call rather than compiled at import. It costs microseconds
+    against a run that reads whole files, and it means the pattern can never
+    be stale with respect to the registry it is supposed to reflect — which
+    is the entire property this indirection exists to provide.
+    """
+    tokens = "|".join(re.escape(word) for word in sorted(kinds.statements()))
+    return re.compile(
+        r"\A\s*CREATE(?:\s+\w+){0,%d}?\s+(%s)\b" % (MAX_STATEMENT_MODIFIERS, tokens),
+        re.I)
+
+
+def classify_sql(text: str):
+    r"""Which source kind this .sql file is, by the statement it opens with.
+
+    Returns None when nothing matches, and None means exactly that — the
+    caller must report it, never fall back to a default kind. A default is
+    what made a CREATE TABLE arrive labelled "view": it passed every check,
+    because every check was then asking whether a view was read correctly.
+
+    Anchored at \A, after comments are stripped. `search` would be wrong in
+    both directions: it would accept a CREATE VIEW buried in a banner comment
+    (a file classified by its documentation, not its code), and it would
+    accept the first CREATE anywhere in a script whose real first statement
+    was something else.
+    """
+    match = _statement_pattern().search(strip_sql_comments(text))
+    if not match:
+        return None
+    return kinds.statements()[match.group(1).upper()]
+
+
+# The declared column list of a CREATE statement. Object names contain spaces,
+# so the name is matched as a quoted string OR a bare token before the "(".
+# The object keyword comes from the registry for the same reason classify_sql's
+# does: a CTAS may declare a column list too, and it is the same anchor.
+def _header_pattern():
+    tokens = "|".join(re.escape(word) for word in sorted(kinds.statements()))
+    return re.compile(r'(?:%s)\s+("(?:[^"]+)"|\S+)\s*\((.*?)\)\s*AS\s' % tokens,
+                      re.S | re.I)
 
 
 def read_sql_text(path: str) -> str:
@@ -74,20 +142,23 @@ def read_sql_text(path: str) -> str:
     return Path(path).read_text(errors="ignore")
 
 
-def declared_view(text: str):
-    """(view name, [declared columns]) from the CREATE VIEW header.
+def declared_object(text: str):
+    """(object name, [declared columns]) from the CREATE header.
 
     The header is the completeness anchor for SQL: a spreadsheet says how many
-    rows it has, a view says how many columns it declares. Returns (None, [])
+    rows it has, a CREATE says how many columns it declares. Returns (None, [])
     when no header is recognisable, and the caller then reports the record
     count without judging it.
+
+    Reads the comment-stripped text, so a column list quoted in a banner
+    cannot be mistaken for the real one.
     """
-    match = VIEW_HEADER.search(text)
+    match = _header_pattern().search(strip_sql_comments(text))
     if not match:
         return None, []
     return match.group(1).strip('"'), re.findall(r'"([^"]+)"', match.group(2))
 
 
 def expected_column_count(text: str):
-    columns = declared_view(text)[1]
+    columns = declared_object(text)[1]
     return len(columns) or None

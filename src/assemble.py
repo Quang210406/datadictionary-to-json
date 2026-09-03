@@ -15,7 +15,9 @@ never on both at once.
 """
 
 from copy import deepcopy
+from pathlib import Path
 
+import kinds
 from catalog import build_catalog
 
 MAX_DEPTH = 8  # guards against a table that (transitively) sources itself
@@ -52,6 +54,42 @@ def stages_in(records) -> list:
     return order
 
 
+def produced_entry(record):
+    """The entry naming the object this record PRODUCES.
+
+    It is the last of the chain, and that is true by construction rather than
+    by convention: every builder here appends the produced entry after its
+    upstream ones (resolve_view, resolve_table and _walk_back all end with
+    `upstream + [entry]`).
+
+    This replaces looking the entry up by the stage name "view". That lookup
+    was correct only while every .sql file happened to be a CREATE VIEW; a
+    file producing any other kind of object would not be found and the caller
+    would silently render a blank name and column rather than fail. Position
+    cannot miss, and it needs no list of the stage names a SQL file may
+    produce — which is exactly the list that is about to grow.
+    """
+    chain = record.get("lineage") or []
+    return chain[-1] if chain else None
+
+
+def records_by_produced_stage(records) -> dict:
+    """{produced stage -> its records}, in the order stages_in reports.
+
+    A folder of .sql scripts is no longer one pipeline: a CREATE VIEW and a
+    CREATE TABLE each declare their own, and a record can only honestly be
+    scored against the stages its own file justified. Grouping is how the
+    report asks each record the right question.
+    """
+    groups = {}
+    for record in records:
+        entry = produced_entry(record)
+        if entry is not None:
+            groups.setdefault(entry["stage"], []).append(record)
+    order = [s for s in stages_in(records) if s in groups]
+    return {stage: groups[stage] for stage in order}
+
+
 def target_key(record):
     """Which entry of a chain identifies the field the record is ABOUT.
 
@@ -86,9 +124,46 @@ def target_key(record):
     return key
 
 
+def target_entry(record):
+    """The lineage entry that NAMES the field a record is about.
+
+    target_key decides which entry that is; this finds it. Kept beside that
+    decision rather than next to either caller, because two callers now need
+    it and a second copy of a locating rule is how the counting rule above
+    came to be written out twice in the first place.
+    """
+    key = target_key(record)
+    if key is None:
+        return None
+    for entry in record.get("lineage") or []:
+        if (entry.get("table"), entry.get("column")) == key:
+            return entry
+    return None
+
+
 def format_key(key) -> str:
     table, column = key
     return f"{table}.{column}" if table else column
+
+
+def short_path(path):
+    """Archive-relative path, matching how the manual sheet cites evidence.
+
+    Falls back to a home-relative path rather than the absolute one. The marker
+    match only fires for archives that happen to live under a folder called
+    exactly "Archive"; every other folder fell through and wrote
+    `/Users/<name>/...` into a spreadsheet that then gets emailed to someone.
+    Nothing about a reviewer's home directory belongs in a deliverable.
+    """
+    if not path:
+        return None
+    marker = "/Archive/"
+    if marker in path:
+        return "Archive/" + path.split(marker, 1)[1]
+    try:
+        return "~/" + str(Path(path).relative_to(Path.home()))
+    except ValueError:
+        return path
 
 
 def _entry(stage, table, column, datatype, size, path, sources, schema=None) -> dict:
@@ -259,7 +334,12 @@ def build_cloud_index(cloud_path, sheets, store) -> dict:
 # origin as a separate field rather than lengthening the chain, so the record
 # shape stays the same whether or not the upstream view was available.
 
-VIEW_STAGES = ["source", "view"]
+# The upstream stage of a SQL record. Unlike the produced stage below, this
+# one genuinely is a fixed name: whatever statement a .sql file holds, the
+# things it reads FROM are physical objects outside the file, and every SQL
+# record starts there. It is a constant so the meaning is stated once rather
+# than re-asserted as a bare string at each comparison.
+SOURCE_STAGE = "source"
 MAX_VIEW_DEPTH = 5
 
 
@@ -275,10 +355,16 @@ def _view_source(record) -> dict:
     }
 
 
-def resolve_view(path, store) -> list:
-    """One lineage record per (view column, source field) of one .sql file."""
+def resolve_view(path, store, kind) -> list:
+    """One lineage record per (declared column, source field) of one .sql file.
+
+    `kind` has no default, deliberately. It used to be the literal "view_sql",
+    which meant every .sql file was read as a view and labelled as one whether
+    it was or not; a default here would restore that, just less visibly. The
+    caller classifies the file and must pass what it found.
+    """
     out = []
-    for record in store.records(path, None, "view_sql"):
+    for record in store.records(path, None, kind):
         column = record.get("target_column")
         if not column:
             continue
@@ -286,22 +372,24 @@ def resolve_view(path, store) -> list:
 
         lineage = []
         if source["column"] or source["table"]:
-            lineage.append(_entry("source", source["table"], source["column"],
+            lineage.append(_entry(SOURCE_STAGE, source["table"], source["column"],
                                   None, None, path, [], source["schema"]))
 
-        lineage.append(_entry("view", record.get("target_table"), column,
-                              None, None, path, [source]))
+        # The produced stage is the kind's own declared statement, lower-cased
+        # — CREATE VIEW gives "view", CREATE TABLE gives "table". It is read
+        # off the same string classification matched on, so the label a record
+        # carries and the reason it was read that way cannot disagree.
+        lineage.append(_entry(kinds.get(kind).stage, record.get("target_table"),
+                              column, None, None, path, [source]))
 
         out.append({"description": None, "lineage": lineage})
     return out
 
 
-def _view_field(record):
-    """(VIEW, COLUMN) this record produces."""
-    for entry in record["lineage"]:
-        if entry["stage"] == "view":
-            return field_key(entry["table"], entry["column"])
-    return None
+def _produced_field(record):
+    """(OBJECT, COLUMN) this record produces, whatever kind of object it is."""
+    entry = produced_entry(record)
+    return field_key(entry["table"], entry["column"]) if entry else None
 
 
 def chain_views(view_records) -> list:
@@ -315,14 +403,14 @@ def chain_views(view_records) -> list:
     """
     produced = {}
     for record in view_records:
-        key = _view_field(record)
+        key = _produced_field(record)
         if key is not None:
             produced.setdefault(key, record)
 
     merged = deepcopy(view_records)
     for record in merged:
         source = record["lineage"][0]
-        if source["stage"] != "source":
+        if source["stage"] != SOURCE_STAGE:
             continue
         via, seen = [], set()
         table, column = source["table"], source["column"]
@@ -333,7 +421,7 @@ def chain_views(view_records) -> list:
             seen.add(key)
             via.append(format_key(key))
             upstream = produced[key]["lineage"][0]
-            if upstream["stage"] != "source":
+            if upstream["stage"] != SOURCE_STAGE:
                 break
             table, column = upstream["table"], upstream["column"]
         if via:

@@ -39,7 +39,13 @@ from typing import Optional, Tuple
 # than off a list of kind names.
 EXCEL = "excel"
 TEXT = "text"
-READERS = (EXCEL, TEXT)
+# A prose document — PDF today, Word and PowerPoint when a layout-aware reader
+# is installed. Unlike the other two it has no completeness anchor at all: a
+# spreadsheet states its row count and a CREATE states its column list, but
+# nothing in a 138-page design document says how many field definitions it
+# ought to contain. That is reported as "not checked" rather than passed.
+DOCUMENT = "document"
+READERS = (EXCEL, TEXT, DOCUMENT)
 
 # Words that must appear in *different* cells of a source kind's column-header
 # row. Deliberately loose: these sheets are hand-maintained and the exact
@@ -57,13 +63,38 @@ class SourceKind:
     omission through and degraded a check instead of failing.
 
     header_anchors is None for a TEXT kind — written out rather than defaulted,
-    so the entry states the choice instead of inheriting it.
+    so the entry states the choice instead of inheriting it. `statement` is the
+    mirror of that: None for an EXCEL kind, required for a TEXT one.
     """
 
     name: str
     schema_file: str
     reader: str
     header_anchors: Optional[Anchors]
+    # The SQL object this kind creates: "VIEW", "TABLE". It does two jobs from
+    # one declaration, which is the whole point of writing it here rather than
+    # in two places that could disagree:
+    #
+    #   extract.classify_sql matches it, to decide which kind a .sql file is
+    #   `stage` below lower-cases it, to name the stage that kind produces
+    #
+    # Those two must agree or the dictionary lies: a file classified by one
+    # word and labelled with another would put CREATE TABLE lineage under a
+    # stage called "view". Deriving both from one string makes that
+    # unrepresentable rather than merely unlikely.
+    statement: Optional[str]
+
+    @property
+    def stage(self):
+        """The pipeline stage this kind produces, or None for an EXCEL kind.
+
+        An Excel kind has no stage of its own — the archive layout says which
+        stage each hop folder feeds, because the answer lives in the folder
+        structure and not in any one file. A .sql file is the opposite: it
+        states what it creates, in itself, which is what makes deriving the
+        stage from the statement honest rather than a guess.
+        """
+        return self.statement.lower() if self.statement else None
 
 
 _REGISTRY = (
@@ -79,6 +110,7 @@ _REGISTRY = (
         # caption; a sheet that says "Source Field" still resolves, since each
         # anchor claims a different cell.
         header_anchors=(("target", "đích", "field"), ("source", "nguồn", "from")),
+        statement=None,
     ),
     SourceKind(
         name="cloud_sheet",
@@ -89,14 +121,39 @@ _REGISTRY = (
         # unnoticed.
         header_anchors=(("column", "trường", "cột"),
                         ("type", "length", "kiểu", "độ dài")),
+        statement=None,
     ),
     SourceKind(
         name="view_sql",
         schema_file="view_record.json",
         reader=TEXT,
         # A view's completeness anchor is the column list it declares, found
-        # by extract.declared_view, not by a header row in a grid.
+        # by extract.declared_object, not by a header row in a grid.
         header_anchors=None,
+        statement="VIEW",
+    ),
+    SourceKind(
+        name="doc_prose",
+        schema_file="doc_description.json",
+        reader=DOCUMENT,
+        # No header row and no declared column list. See DOCUMENT above: this
+        # kind is the one that legitimately has no completeness anchor.
+        header_anchors=None,
+        statement=None,
+    ),
+    SourceKind(
+        name="table_sql",
+        # SHARES the view schema, deliberately. A CREATE TABLE ... AS SELECT
+        # states exactly the same facts a view does — target column, source
+        # field, expression — and declares no datatypes either, because its
+        # types are inherited from the SELECT rather than written down. A
+        # forked copy of view_record.json would be identical today and would
+        # drift tomorrow, and _check() cannot police two files being *the
+        # same*; it can only police a kind naming one. One file, one meaning.
+        schema_file="view_record.json",
+        reader=TEXT,
+        header_anchors=None,
+        statement="TABLE",
     ),
 )
 
@@ -116,6 +173,17 @@ def get(name) -> SourceKind:
 def schema_files() -> dict:
     """{kind name -> schema filename}, for loading the schemas."""
     return {name: kind.schema_file for name, kind in KINDS.items()}
+
+
+def statements() -> dict:
+    """{statement token -> kind name} for every kind that declares one.
+
+    extract.classify_sql builds its pattern from this rather than from a list
+    of its own, so registering a kind is still one entry in one file. A second
+    list would be the fifth place a document type had to be declared, which is
+    the exact failure this module exists to end.
+    """
+    return {kind.statement: name for name, kind in KINDS.items() if kind.statement}
 
 
 def header_anchors(name):
@@ -147,6 +215,20 @@ def _check():
             seen.add(kind.name)
         raise ValueError(f"source kind name(s) declared twice: {sorted(duplicates)}")
 
+    # Two kinds claiming one statement would not raise anywhere: classify_sql
+    # would return whichever the alternation reached first and the other kind
+    # would never be chosen, silently. It is the duplicate-name check applied
+    # to the other identifier a kind is selected by.
+    claimed = {}
+    for kind in _REGISTRY:
+        if kind.statement and kind.statement in claimed:
+            raise ValueError(
+                f"source kinds {claimed[kind.statement]!r} and {kind.name!r} "
+                f"both declare statement {kind.statement!r}; classification "
+                "would pick one and never reach the other.")
+        if kind.statement:
+            claimed[kind.statement] = kind.name
+
     for kind in _REGISTRY:
         if not kind.name:
             raise ValueError("a source kind has an empty name")
@@ -169,6 +251,38 @@ def _check():
                 f"source kind {kind.name!r} reads text but declares "
                 "header_anchors; a text source has no header row to find them "
                 "in, so they would never be consulted.")
+
+        # The same pair of rules for `statement`, and for the same reason: a
+        # TEXT kind with none can never be reached, because classify_sql has
+        # nothing to match it by — it would be a registered kind that silently
+        # never runs, which is the anchors bug wearing a different hat.
+        if kind.reader == DOCUMENT and kind.statement:
+            raise ValueError(
+                f"source kind {kind.name!r} reads a document but declares "
+                "statement {kind.statement!r}; prose has no CREATE statement, "
+                "so classify_sql would never select it.")
+        if kind.reader == DOCUMENT and kind.header_anchors:
+            raise ValueError(
+                f"source kind {kind.name!r} reads a document but declares "
+                "header_anchors; there is no header row in prose.")
+        if kind.reader == TEXT and not kind.statement:
+            raise ValueError(
+                f"source kind {kind.name!r} reads text but declares no "
+                "statement. classify_sql builds its pattern from the declared "
+                "statements, so this kind could never be selected — it would "
+                "sit in the registry looking supported and never read a file.")
+        if kind.reader == EXCEL and kind.statement:
+            raise ValueError(
+                f"source kind {kind.name!r} reads Excel but declares statement "
+                f"{kind.statement!r}; a workbook holds no SQL statement, so it "
+                "would never be matched and the stage it implies would never "
+                "be used.")
+        if kind.statement and kind.statement.split() != [kind.statement]:
+            raise ValueError(
+                f"source kind {kind.name!r} statement {kind.statement!r} is not "
+                "a single word. It is interpolated into a regex alternation and "
+                "lower-cased into a stage name; whitespace would break the "
+                "first and put a space in a spreadsheet column heading.")
 
         for group in kind.header_anchors or ():
             if not group:

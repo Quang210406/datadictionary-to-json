@@ -12,7 +12,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from assemble import stages_in
+import descriptions
+from assemble import produced_entry, short_path, stages_in
 
 # Fill colour per stage group, taken by the stage's POSITION in the pipeline
 # rather than by its name. This was the last place downstream of assembly that
@@ -43,6 +44,7 @@ WIDTHS = {1: 22, 2: 22, 3: 46, 4: 11, 5: 7, 6: 26, 7: 24, 8: 46, 9: 11, 10: 7,
           11: 20, 12: 18, 13: 48, 14: 11, 15: 7, 16: 20, 17: 18, 18: 60, 19: 11,
           20: 7, 21: 30, 22: 20, 23: 44, 24: 40}
 TABLE_TOKEN = re.compile(r"\b(?:STG|DWH|SRC)_[A-Z0-9_]{3,}\b", re.I)
+AUTHORED_COL = descriptions.AUTHORED_COL   # one spelling, declared once
 
 
 def _write_rows(ws, rows, start_row, should_wrap):
@@ -65,16 +67,15 @@ def _apply_layout(ws, widths, freeze):
     ws.freeze_panes = freeze
 
 
-def _short(path):
-    """Archive-relative path, matching how the manual sheet cites evidence."""
-    if not path:
-        return None
-    marker = "/Archive/"
-    return "Archive/" + path.split(marker, 1)[1] if marker in path else path
+def _tail(record, authored=None):
+    """(description, transformation type, rule, dependencies) for one row.
 
-
-def _tail(record):
-    """(description, transformation type, rule, dependencies) for one row."""
+    `authored` is appended as a FIFTH value when a description overlay is in
+    play, never merged into the first. The two are different kinds of claim —
+    one copied from a document and checkable against it, the other somebody's
+    reading — and one column holding both would make that difference
+    unrecoverable for whoever reads the sheet next.
+    """
     produced = None
     for entry in record["lineage"]:
         if entry["sources"]:
@@ -83,24 +84,30 @@ def _tail(record):
     logic = source.get("transformation_logic") or ""
     named = {t.upper() for t in TABLE_TOKEN.findall(logic)}
     named -= {(source.get("table") or "").upper()}
-    return (record.get("description"), source.get("transformation_type"),
+    tail = (record.get("description"), source.get("transformation_type"),
             logic or None, ", ".join(sorted(named)) or None)
+    return tail if authored is None else tail + (authored or None,)
 
 
-def to_rows(lineage_records, groups) -> list:
+def to_rows(lineage_records, groups, overlay=None) -> list:
     rows = []
     for record in lineage_records:
         by_stage = {e["stage"]: e for e in record["lineage"]}
         row = []
         for _, stage, _ in groups:
             entry = by_stage.get(stage)
-            row += ([entry["table"], entry["column"], _short(entry["offline_path"]),
+            row += ([entry["table"], entry["column"], short_path(entry["offline_path"]),
                      entry["datatype"], entry["size"]] if entry else [None] * 5)
-        rows.append(row + list(_tail(record)))
+        authored = None if overlay is None else (
+            descriptions.authored_for(record, overlay) or "")
+        rows.append(row + list(_tail(record, authored)))
     return rows
 
 
-def write_workbook(lineage_records, path, stages=None):
+def write_workbook(lineage_records, path, stages=None, overlay=None):
+    """The archive spreadsheet. `overlay` adds one column and changes nothing
+    else — without it the layout is byte-for-byte what it has always been."""
+    tail_cols = TAIL_COLS if overlay is None else TAIL_COLS + [AUTHORED_COL]
     groups = stage_groups(stages or stages_in(lineage_records))
     wb = Workbook()
     ws = wb.active
@@ -116,13 +123,16 @@ def write_workbook(lineage_records, path, stages=None):
             ws.cell(3, off + k + 1).font = Font(bold=True)
         ws.cell(2, off + 1).font = Font(bold=True)
     tail_start = len(groups) * len(STAGE_COLS) + 1
-    for k, header in enumerate(TAIL_COLS):
+    for k, header in enumerate(tail_cols):
         cell = ws.cell(3, tail_start + k, header)
         cell.font = Font(bold=True)
         cell.fill = PatternFill("solid", fgColor="EEEEEE")
-    _write_rows(ws, to_rows(lineage_records, groups), 4,
+    _write_rows(ws, to_rows(lineage_records, groups, overlay), 4,
                 lambda c: c >= tail_start)
-    _apply_layout(ws, WIDTHS, "A4")
+    widths = dict(WIDTHS)
+    if overlay is not None:
+        widths[tail_start + len(tail_cols) - 1] = 60
+    _apply_layout(ws, widths, "A4")
     wb.save(path)
     return path
 
@@ -143,8 +153,11 @@ VIEW_WIDTHS = {1: 14, 2: 26, 3: 30, 4: 26, 5: 30, 6: 9, 7: 62, 8: 26, 9: 10,
 def view_rows(view_records) -> list:
     rows = []
     for record in view_records:
-        by_stage = {e["stage"]: e for e in record["lineage"]}
-        view = by_stage.get("view", {})
+        # By position, not by the stage name "view": a record produced by a
+        # statement of any other kind would miss a name lookup, and the miss
+        # would render as two blank cells under View Name / View Column rather
+        # than as an error — a wrong dictionary that looks merely incomplete.
+        view = produced_entry(record) or {}
         source = (view.get("sources") or [{}])[0]
         resolved = record.get("resolved_source") or {}
         ultimate = ""

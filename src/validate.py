@@ -1,6 +1,11 @@
+from pathlib import Path
+
 import jsonschema
 
-from assemble import field_key, format_key, stages_in, target_key
+import kinds
+from assemble import (field_key, format_key, produced_entry, stages_in,
+                      target_key)
+from extract import classify_sql
 
 MIN_PLAUSIBLE_COLUMNS = 3
 
@@ -35,14 +40,55 @@ def validate_input(df) -> list:
     return errors
 
 # Checkpoint 1 for a text source. A .sql file has no rows or columns to count,
-# so the equivalent sanity check is that it holds a view definition at all.
-def validate_sql_input(text) -> list:
+# so the equivalent sanity check is that it holds a statement this program
+# knows how to read, and that the statement is the one the caller thinks it is.
+#
+# This is the last gate before a paid API call, which is why the statement
+# check belongs here and not only in the caller. Before it existed, a .sql
+# file only had to contain the word "select" somewhere to reach the model:
+# a.sql (CREATE TABLE ... AS SELECT) passed, was extracted under the view
+# prompt, and came back labelled a view end to end. Nothing downstream could
+# catch it — every downstream check was asking whether a view had been read
+# correctly, not whether the file was a view.
+def validate_sql_input(text, kind=None) -> list:
     errors = []
     if not text or not text.strip():
-        errors.append("SQL file is empty.")
+        return ["SQL file is empty."]
+
+    found = classify_sql(text)
+    if found is None:
+        errors.append(
+            "SQL file opens with no recognised CREATE statement; "
+            f"expected one of {sorted(kinds.statements())}. Not read.")
+    elif kind is not None and found != kind:
+        # Reached only if a caller names the kind itself instead of asking
+        # classify_sql. Cheap to check, and the failure it prevents is a file
+        # extracted under the wrong prompt and then labelled with the wrong
+        # stage — wrong in a way that reads as correct.
+        errors.append(
+            f"SQL file was to be read as {kind!r} but its statement says "
+            f"{found!r}; refusing to read it under the wrong prompt.")
     elif "select" not in text.lower():
-        errors.append("SQL file contains no SELECT; not a view definition.")
+        errors.append("SQL file contains no SELECT; it defines no lineage.")
     return errors
+
+
+# Checkpoint 1 for a prose document. There is no row count and no declared
+# column list to check against, so the only thing worth asserting before
+# spending a call is that the reader got something back. A PDF that is a scan
+# yields nothing, and readers.py raises before we get here; this catches the
+# quieter case of a file that opened fine and is simply empty.
+MIN_DOCUMENT_CHARS = 200
+
+
+def validate_document_input(text) -> list:
+    if not text or not text.strip():
+        return ["Document is empty after reading; nothing to extract."]
+    if len(text.strip()) < MIN_DOCUMENT_CHARS:
+        return [f"Document yielded only {len(text.strip())} characters, which "
+                "is too little to be a design document. It is most likely a "
+                "scan with no text layer."]
+    return []
 
 
 # shape, also track which records have at least one violation
@@ -159,6 +205,26 @@ def validate_output(result, expected_count, schema, source_text: str) -> dict:
     return {"errors": errors, "metrics": metrics}
 
 
+# Which stages a given record is entitled to be judged against.
+#
+# Without stages_for every record is scored against one list — correct for an
+# archive, where the layout declares one pipeline for the whole folder, and
+# where a declared-but-absent stage SHOULD score 0% (tests/test_no_cloud_stage
+# .py exists to hold that line).
+#
+# It is wrong wherever each file declares its own pipeline. A folder holding a
+# CREATE VIEW and a CREATE TABLE yields the union [source, view, table], and
+# no record has all three — so records that are individually complete report
+# 0% complete, which is the same trap the no-cloud-stage test documents,
+# arriving from the other direction. Measured before this existed: three
+# records, each complete for its own kind, scored 0/3.
+def _expected_stages(record, stage_names, stages_for):
+    if not stages_for:
+        return stage_names
+    produced = produced_entry(record)
+    return stages_for.get(produced["stage"] if produced else None, stage_names)
+
+
 def _sorted_stage_keys(stage_keys):
     return sorted(stage_keys, key=lambda pair: (pair[0], pair[1][0] or "", pair[1][1]))
 
@@ -167,6 +233,93 @@ def _counted(items, render):
     return {
         "count": len(items),
         "examples": [render(item) for item in items[:DIAGNOSTIC_EXAMPLES]],
+    }
+
+
+# Checkpoint 2b, reported rather than enforced: WHICH sources the completeness
+# check could actually run on.
+#
+# Completeness is the check that catches a truncated reply, and it needs an
+# anchor — a number the source itself states. A spreadsheet states a row count;
+# a CREATE states a declared column list. When neither is recoverable the check
+# does not fail, it simply does not run, and `fields_covered` renders "N/unknown".
+#
+# That is the honest answer, but on its own it is easy to miss: a.sql sat in a
+# folder of views for weeks with its completeness silently switched off, pooled
+# into every headline percentage as though it had passed. So the files with no
+# anchor are named here, with the reason, instead of being left for someone to
+# infer from a metric they would have to go looking for.
+#
+# Some of this cannot be fixed and should not be pretended away. A
+# `CREATE TABLE x AS SELECT *` states no column list at all, and working out
+# what the star expands to needs the definition of another table — another
+# file. The governing principle forbids showing the model two files at once,
+# so there is no honest anchor to derive. "Not checked" is the truth, and the
+# report says so.
+NO_ANCHOR = {
+    kinds.TEXT:
+        "the statement declares no column list, so nothing in the file states "
+        "how many columns it should produce",
+    kinds.EXCEL:
+        "no column-header row was recognised, so the data row count could not "
+        "be established",
+}
+
+
+def completeness_report(source_reports) -> dict:
+    """Which sources completeness ran on, and why it did not run on the rest."""
+    checked, skipped, unread = 0, [], []
+    for report in source_reports:
+        name = Path(report["path"]).name
+        label = f"{name} [{report['sheet']}]" if report.get("sheet") else name
+        covered = (report.get("metrics") or {}).get("fields_covered")
+        if covered is None:
+            # Never read at all: checkpoint 1 rejected it, or extraction
+            # failed. source_errors already says which; it is not a silent gap.
+            unread.append(label)
+        elif covered.endswith("/unknown"):
+            kind = kinds.get(report["kind"])
+            skipped.append({
+                "source": label,
+                "kind": report["kind"],
+                "records_emitted": (report.get("metrics") or {}).get(
+                    "records_emitted"),
+                "reason": NO_ANCHOR.get(kind.reader, "no anchor available"),
+            })
+        else:
+            checked += 1
+    return {
+        "sources_checked": checked,
+        "sources_not_checked": len(skipped),
+        "sources_not_read": len(unread),
+        "not_checked": skipped,
+        "not_read": unread,
+    }
+
+
+# Checkpoint 5: does the ASSEMBLED dictionary have the shape it claims?
+#
+# The per-file checks ask whether the model read one file correctly. This asks
+# whether the thing Python then built out of those answers is well formed —
+# the one artefact nobody was checking, against the one schema nobody was
+# loading. It is cheap (pure jsonschema over records already in memory) and it
+# closes the loop: schemas/lineage.json now describes the output AND is
+# consulted, so it can no longer quietly become a description of the past.
+#
+# Reported, not fatal, but for a different reason than coverage is. Coverage
+# is non-fatal because a blank may be the truthful answer. A violation here is
+# never truthful — it means assemble.py built something malformed — so it is
+# printed as a problem rather than a metric. It still does not abort, because
+# aborting after every file has been read destroys work that may have cost API
+# calls, and the malformed records are more useful written down than lost.
+def validate_assembled(lineage_records, schema) -> dict:
+    errors, dirty = _check_shape(lineage_records, schema)
+    return {
+        "schema": "lineage.json",
+        "records_checked": len(lineage_records),
+        "clean_records": len(lineage_records) - len(dirty),
+        "violations": len(errors),
+        "examples": errors[:DIAGNOSTIC_EXAMPLES],
     }
 
 
@@ -192,14 +345,21 @@ def _counted(items, render):
 # identical to a break, and only someone who knows the platform can say
 # which it is. What the number is good for is movement: complete_chains
 # dropping is a chaining regression.
-def chain_diagnostics(lineage_records, stage_names) -> dict:
-    first_stage, last_stage = stage_names[0], stage_names[-1]
+def chain_diagnostics(lineage_records, stage_names, stages_for=None) -> dict:
+    # No stages means no records: the SQL mode now derives its stage list from
+    # the records instead of asserting one, so a run where every file failed
+    # extraction arrives here with both lists empty. That is a report of
+    # nothing, not a crash — the extraction errors are the finding, and this
+    # block should not bury them under an IndexError.
     complete_chains = 0
     unmatched_tails, unmatched_heads = set(), set()
 
     for record in lineage_records:
         chain = record["lineage"]
         head, tail = chain[0], chain[-1]
+        expected = _expected_stages(record, stage_names, stages_for)
+        first_stage = expected[0] if expected else None
+        last_stage = expected[-1] if expected else None
         starts_at_first = head["stage"] == first_stage
         reaches_last = tail["stage"] == last_stage
 
@@ -235,7 +395,12 @@ def chain_diagnostics(lineage_records, stage_names) -> dict:
 # These are counts, never errors — a blank is often the truthful answer.
 
 
-def coverage_metrics(lineage_records, stages=None) -> dict:
+def coverage_metrics(lineage_records, stages=None, stages_for=None) -> dict:
+    """Per-column coverage. `stages` is what the stage_* columns report on —
+    the union, so a mixed folder still shows every stage present in it.
+    `stages_for` is what COMPLETENESS is judged against, per record; see
+    _expected_stages. They differ on purpose: you want to see every stage in
+    the folder, and you want each record judged only on its own."""
     stages = stages or stages_in(lineage_records)
     total = len(lineage_records)
     if not total:
@@ -244,6 +409,7 @@ def coverage_metrics(lineage_records, stages=None) -> dict:
     datatype_present = {s: 0 for s in stages}
     described = full_chain = with_logic = multi_source = 0
     targets = {}
+    described_targets = set()
     for record in lineage_records:
         by_stage = {e["stage"]: e for e in record["lineage"]}
         for s in stages:
@@ -253,7 +419,7 @@ def coverage_metrics(lineage_records, stages=None) -> dict:
                     datatype_present[s] += 1
         if record.get("description"):
             described += 1
-        if all(s in by_stage for s in stages):
+        if all(s in by_stage for s in _expected_stages(record, stages, stages_for)):
             full_chain += 1
         if any(src.get("transformation_logic")
                for entry in record["lineage"] for src in entry["sources"]):
@@ -261,14 +427,24 @@ def coverage_metrics(lineage_records, stages=None) -> dict:
         key = target_key(record)
         if key:
             targets[key] = targets.get(key, 0) + 1
+            if record.get("description"):
+                described_targets.add(key)
     multi_source = sum(1 for n in targets.values() if n > 1)
     pct = lambda n: f"{n}/{total} ({n / total:.0%})"
+    # The same fact counted two ways, both reported, because they answer
+    # different questions and quoting one for the other misleads. Measured on
+    # the real archive: 63/83 records carry a description, but that is only
+    # 59/70 FIELDS — and a person writing descriptions works in fields.
+    fields_pct = (f"{len(described_targets)}/{len(targets)} "
+                  f"({len(described_targets) / len(targets):.0%})"
+                  if targets else "0/0")
     return {
         "records": total,
         "distinct_target_fields": len(targets),
         "n_to_1_target_fields": multi_source,
         "complete_chains": pct(full_chain),
         "with_description": pct(described),
+        "fields_with_description": fields_pct,
         "with_transformation_logic": pct(with_logic),
         **{f"stage_{s}": pct(stage_present[s]) for s in stages},
         **{f"datatype_{s}": pct(datatype_present[s]) for s in stages
