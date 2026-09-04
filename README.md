@@ -289,4 +289,5 @@ records[0].lineage[-1].sources[0].role
 
 ---
 
+What it does, what it does not, and what it checks: [docs/CAPABILITIES.md](docs/CAPABILITIES.md)  
 Design and internals: [docs/DESIGN.md](docs/DESIGN.md)
