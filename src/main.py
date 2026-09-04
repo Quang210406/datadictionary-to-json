@@ -15,6 +15,7 @@ from store import RecordStore
 import descriptions
 import rules_doc
 import survey
+import templates
 from validate import (chain_diagnostics, completeness_report,
                       coverage_metrics, validate_assembled)
 
@@ -27,7 +28,15 @@ SCHEMA_DIR = ROOT / "schemas"
 # global read at call time, because the app corrects it after import: a frozen
 # bundle does not preserve the path main.py computes from its own __file__.
 def load_schemas():
-    return {kind: json.loads((SCHEMA_DIR / filename).read_text(encoding="utf-8"))
+    """The extraction contract per source kind, generated from the models.
+
+    src/templates.py is the declaration; schemas/*.json are the same thing
+    written out for anyone who wants to read the contract without reading
+    Python. Generating rather than loading means the two cannot drift — and
+    tests/test_templates.py asserts they serialise identically, so the file on
+    disk stays an honest copy rather than a second source of truth.
+    """
+    return {kind: templates.json_schema(filename)
             for kind, filename in kinds.schema_files().items()}
 
 
