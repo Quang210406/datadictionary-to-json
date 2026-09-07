@@ -30,7 +30,7 @@ that works is in [docs/DESIGN.md](docs/DESIGN.md).
 | **Checks itself** | six checks per run, including one that proves no value was invented |
 | **Runs on any model** | Gemini, OpenAI, Claude, Mistral, or Ollama on your own machine |
 | **Scores itself** | compares its output against a dictionary built by hand |
-| **Runs without a terminal** | a macOS app in `app/`, for reviewers who work in Excel |
+| **Runs without a terminal** | a macOS app in `app/`|
 
 ---
 
