@@ -1,0 +1,37 @@
+{
+  "_comment": [
+    "Template for pointing Hecate at an archive shaped differently from the",
+    "one it was written against. Copy this next to the archive folders and",
+    "rename it archive.json, and the app picks it up with no further steps.",
+    "Or keep it anywhere and select it when the app asks for a layout file.",
+    "",
+    "stages  = every stage a field passes through, in pipeline order.",
+    "hops    = one folder per stage transition. 'dir' is the folder name as",
+    "          it appears inside the archive; 'from' and 'to' must both be",
+    "          names that appear in 'stages'.",
+    "cloud   = OPTIONAL. Only for a final stage that lives in ONE workbook",
+    "          with one sheet per table, rather than one file per table.",
+    "          Delete the whole block if the archive has no such workbook.",
+    "table_prefixes = strip these when matching a table to a cloud sheet,",
+    "          for archives that file DWH_CUSTOMER as just CUSTOMER.",
+    "non_hop_sheets = sheets inside a hop workbook that are not mappings.",
+    "",
+    "A layout naming a stage that does not exist is rejected with a message",
+    "rather than quietly producing unrecognised stage labels."
+  ],
+
+  "stages": ["source", "staging", "dwh", "cloud"],
+
+  "hops": [
+    {"dir": "SRC_STGDIH",    "from": "source",  "to": "staging"},
+    {"dir": "STGDIH_DWHDIH", "from": "staging", "to": "dwh"}
+  ],
+
+  "cloud": {
+    "glob": "*Mapping*CLOUD*.xlsx",
+    "stage": "cloud",
+    "table_prefixes": ["DWH_"]
+  },
+
+  "non_hop_sheets": ["DDL"]
+}

@@ -41,10 +41,26 @@ build/hecate/
 build/icon.iconset/
 build/_icon_1024.png
 
-# Desktop app and its build tooling. Delivered privately to one reviewer, not
-# part of the published CLI project.
-app/
-build/
+# The desktop app's SOURCE is published; what a reviewer RECEIVES is not.
+#
+# The line between the two is not "app vs build" — it runs through both. The
+# GUI source and the build tooling describe how the thing is made, which is the
+# part worth reading. The bundle, the guides written for one person, and above
+# all the baked key are what gets handed over, and none of that belongs in a
+# public repo.
+#
+# app/bundled_key.py is ignored at the top of this file, before anything here
+# can un-ignore it. It holds a real API key, generated at build time.
+app/__pycache__/
+build/hecate/
+build/icon.iconset/
+build/_icon_1024.png
+
+# Written for the reviewer, not for this repo.
+build/HANDOVER.md
+build/HANDOVER_SUMMARY.md
+build/HUONG_DAN.md
+
 introduction.md
 introduction.pdf
 requirements.txt
