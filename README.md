@@ -30,6 +30,7 @@ that works is in [docs/DESIGN.md](docs/DESIGN.md).
 | **Checks itself** | six checks per run, including one that proves no value was invented |
 | **Runs on any model** | Gemini, OpenAI, Claude, Mistral, or Ollama on your own machine |
 | **Scores itself** | compares its output against a dictionary built by hand |
+| **Runs without a terminal** | a macOS app in `app/`, for reviewers who work in Excel |
 
 ---
 
@@ -115,6 +116,9 @@ python src/main.py --archive path/to/archive --table DWH_PARTY --table DWH_ACCOU
 Omit `--table` to build every table produced by the last hop. Each table costs
 API calls, so start with one or two.
 
+A workbook may hold **one table per sheet** or one table per file; every hop
+sheet is indexed either way.
+
 ## Build from SQL scripts
 
 ```bash
@@ -143,6 +147,13 @@ Costs nothing: it reads folder and sheet **names**, never a cell.
 You can also write the layout by hand — `archive.example.json` is a commented
 template. Resolution order is `--layout FILE` → `archive.json` inside the
 archive → a built-in default.
+
+A layout can also declare the **column-header captions** its sheets use, under
+`header_anchors`. The built-in ones cover `target`/`đích`/`field` and
+`source`/`nguồn`/`from`; an archive whose sheets say "Destination Column" and
+"Origin Table" declares its own. This matters more than it looks: unrecognised
+captions do not fail, they switch the completeness check off — and that is the
+check that catches a truncated reply.
 
 ## Fill in field meanings
 
@@ -275,6 +286,17 @@ records[0].lineage[-1].sources[0].role
 ```
 
 
+
+## Run it without a terminal
+
+`app/` is a macOS desktop window over the same code. It calls `main.run(args)`
+and nothing else, so the app and the command line cannot drift apart. It adds
+one free *scan* step the CLI has no need for: the CLI's default is to build
+every table it finds, which on a real archive is a ninety-file run somebody
+could start by accident.
+
+`build/build.sh` freezes it into a signed `.app`. It is not on PyPI and there
+is no release to download — build it, or use the CLI.
 
 ## Limitations
 

@@ -56,6 +56,10 @@ build/hecate/
 build/icon.iconset/
 build/_icon_1024.png
 
+# A byte-identical copy of the archive.example.json already at the repo root.
+# Two tracked copies of one template is how the four-dict problem started.
+build/archive.example.json
+
 # Written for the reviewer, not for this repo.
 build/HANDOVER.md
 build/HANDOVER_SUMMARY.md
