@@ -6,11 +6,13 @@ import assemble
 import emit
 import entities
 import kinds
+import mapping
+import order
 from catalog import build_catalog, cloud_sheets, find_cloud_workbook
 import readers
 from extract import classify_sql, read_sql_text
-from layout import (LayoutError, cloud_stage, final_hop_dir, load_layout,
-                    table_prefixes)
+from layout import (LayoutError, cloud_stage, final_hop_dir, header_anchors,
+                    load_layout, table_prefixes)
 from store import RecordStore
 import descriptions
 import rules_doc
@@ -108,6 +110,30 @@ def parse_args(argv=None):
                              "the spreadsheet and counted in the report; it is "
                              "never written into the JSON dictionary, which "
                              "means only what the source documents state.")
+    parser.add_argument("--docs", metavar="DIR_OR_FILE",
+                        help="build a dictionary from prose documents (PDF, "
+                             "Word) alone: read each for the MAPPINGS it "
+                             "states, not just field meanings. Each document is "
+                             "split into sections and each section is read on "
+                             "its own; the chain is joined afterwards, in "
+                             "Python, exactly as for the other two modes.")
+    parser.add_argument("--assembler", default="legacy",
+                        choices=["legacy", "unified", "both"],
+                        help="which assembler builds the chain. 'legacy' is the "
+                             "per-mode resolver the published numbers were "
+                             "measured with; 'unified' is the one claim pool "
+                             "shared by every format; 'both' runs each and "
+                             "reports the difference, which is how the two were "
+                             "shown to agree record-for-record.")
+    parser.add_argument("--generate-template", nargs="+", metavar="DOC",
+                        help="induce a Pydantic extraction contract from one or "
+                             "more example documents and write it, as readable "
+                             "Python, under out/generated/. Needs docling-graph. "
+                             "The module is written only if its own "
+                             "verification passes, and it is never adopted "
+                             "automatically — a generated contract is embedded "
+                             "in the prompt, so a person reads it before it "
+                             "decides what a dictionary means.")
     parser.add_argument("--out", default=None,
                         help="lineage RECORDS as JSON "
                              "(default: views.json / output.json by mode).")
@@ -142,7 +168,26 @@ MODE_DEFAULTS = {
     "archive": {"out": f"{OUT_DIR}/output.json", "xlsx": f"{OUT_DIR}/output.xlsx",
                 "report": f"{OUT_DIR}/report.json",
                 "cache": ".cache/records.json"},
+    # Its own four, like the other two. A docs run that wrote output.json would
+    # silently replace an archive dictionary with a prose-derived one, and the
+    # two are not the same claim about the world.
+    "docs":    {"out": f"{OUT_DIR}/docs.json", "xlsx": f"{OUT_DIR}/docs.xlsx",
+                "report": f"{OUT_DIR}/docs_report.json",
+                "cache": ".cache/docs.json"},
 }
+
+
+def mode_of(args) -> str:
+    """Which of the three modes this run is.
+
+    Read with getattr so a namespace built by hand still works — the desktop
+    app assembles one and sets its four output paths itself.
+    """
+    if getattr(args, "sql", None):
+        return "sql"
+    if getattr(args, "docs", None):
+        return "docs"
+    return "archive"
 
 
 def apply_mode_defaults(args):
@@ -152,7 +197,7 @@ def apply_mode_defaults(args):
     works on a namespace built by hand — the desktop app assembles one and
     sets all four itself, and anything it has already set is left alone.
     """
-    for field, value in MODE_DEFAULTS["sql" if args.sql else "archive"].items():
+    for field, value in MODE_DEFAULTS[mode_of(args)].items():
         if getattr(args, field, None) is None:
             setattr(args, field, value)
     return args
@@ -315,6 +360,127 @@ def finish(records, report, args, emitter, extra_blocks=(), overlay=None):
     print(f"\nWrote {len(records)} records -> {args.out}, {args.xlsx}, {args.report}")
 
 
+# ------------------------------------------------------------- claim pools
+#
+# One pool per mode, because discovering WHICH files to read differs per corpus
+# even though what is done with them afterwards no longer does.
+
+
+def archive_claims(catalog, store, targets):
+    """Claims for the tables reachable from `targets`, loading LAZILY.
+
+    Reachability, not the whole catalog. `resolve_table` visits files as it
+    discovers them, so a run touches only the tables it actually reaches — 20
+    workbooks of 89 for the two published targets. Building the pool eagerly
+    would convert all 89 and cost 69 needless API calls on a free-tier key, so
+    this reproduces the same walk and collects claims as it goes.
+
+    The catalog survives, demoted to what its own docstring always claimed it
+    was: an index saying which FILE defines which table. What it no longer does
+    is repair the join key — mapping.claims_from stamps the sheet name as the
+    subject before anything is pooled.
+    """
+    seen, queue, claims, pairs = set(), list(targets), [], []
+    while queue:
+        table = queue.pop(0)
+        key = assemble.table_key(table)
+        if key is None or key in seen:
+            continue
+        seen.add(key)
+        owner = catalog.get(key)
+        if owner is None:
+            continue          # no file owns it: the chain has reached its origin
+        subject = (owner.get("sheet") or "").strip() or table
+        found = mapping.claims_from(
+            "hop_spec", owner["path"], owner["sheet"], subject,
+            store.records(owner["path"], owner["sheet"], "hop_spec"))
+        claims += found
+        pairs.append((subject, owner["to_stage"]))
+        queue += [c.source_table for c in found if c.source_table]
+    return claims, pairs
+
+
+def sql_claims(file_kinds, store):
+    """Claims from a folder of CREATE scripts, one subject per file."""
+    claims = []
+    for path, kind in file_kinds.items():
+        records = store.records(str(path), None, kind)
+        # The subject is the object the statement creates. Taken from the
+        # extraction rather than re-parsed, because that is the value
+        # resolve_view has always used and the SQL ground truth was measured
+        # against it; the CREATE line is the cross-check, not the source.
+        subject = next((r.get("target_table") for r in records
+                        if isinstance(r, dict) and r.get("target_table")), None)
+        claims += mapping.claims_from(kind, str(path), None, subject, records)
+    return claims
+
+
+def doc_claims(store, paths, verbose=True):
+    """Claims from prose documents, one call per SECTION.
+
+    A document is split before it is read — see sections.py: the 138-page design
+    document is 211,648 characters, twelve times the largest input this program
+    has ever sent, against a file thirteen times smaller that already truncated.
+    """
+    claims, read = [], []
+    for path in paths:
+        try:
+            parts = store.sections(str(path))
+        except Exception as exc:
+            read.append({"file": Path(path).name, "sections": 0,
+                         "error": f"{type(exc).__name__}: {str(exc)[:120]}"})
+            continue
+        if verbose:
+            print(f"  {Path(path).name}: {len(parts)} section(s)")
+        found = 0
+        for section_id, _ in parts:
+            records = store.records(str(path), section_id, "doc_lineage")
+            new = mapping.claims_from("doc_lineage", str(path), section_id,
+                                      None, records)
+            claims += new
+            found += len(new)
+        read.append({"file": Path(path).name, "sections": len(parts),
+                     "claims": found})
+    return claims, read
+
+
+def assembler_diff(legacy, unified) -> dict:
+    """Where the two assemblers disagree, keyed by the field each record is about.
+
+    Reported rather than raised. The point of running both is to SHOW they
+    agree; a difference is a finding to look at, and the run should still
+    produce its dictionary while somebody looks.
+    """
+    def key(record):
+        produced = assemble.produced_entry(record) or {}
+        head = record["lineage"][0] if record.get("lineage") else {}
+        return (produced.get("table"), produced.get("column"),
+                head.get("table"), head.get("column"))
+
+    def bucket(records):
+        out = {}
+        for record in records:
+            out.setdefault(key(record), []).append(
+                json.dumps(record, sort_keys=True, ensure_ascii=False))
+        return {k: sorted(v) for k, v in out.items()}
+
+    left, right = bucket(legacy), bucket(unified)
+    only_legacy = sorted(set(left) - set(right))
+    only_unified = sorted(set(right) - set(left))
+    differing = [k for k in set(left) & set(right) if left[k] != right[k]]
+    return {
+        "legacy_records": len(legacy),
+        "unified_records": len(unified),
+        "only_in_legacy": len(only_legacy),
+        "only_in_unified": len(only_unified),
+        "differing": len(differing),
+        "identical": len(set(left) & set(right)) - len(differing),
+        "agrees": not (only_legacy or only_unified or differing),
+        "examples": [f"{k[0]}.{k[1]} <- {k[2]}.{k[3]}"
+                     for k in (only_legacy + only_unified + differing)[:5]],
+    }
+
+
 def build_views(args):
     """Lineage from CREATE scripts: one file per object, two stages.
 
@@ -354,6 +520,31 @@ def build_views(args):
         records += assemble.resolve_view(str(path), store, kind)
     records = assemble.chain_views(records)
 
+    # The unified assembler over the same store — no extra API call, because
+    # every file it asks for has already been read.
+    assembler = getattr(args, "assembler", "legacy") or "legacy"
+    stage_audit = diff_report = None
+    if assembler != "legacy":
+        claims = sql_claims(file_kinds, store)
+        derived = order.derive(claims)
+        # chain_depth=1 because a .sql file asserts ONE hop and that is what the
+        # hand-built SQL ground truth scores. The longer chain is still followed
+        # — chain_views records it as resolved_source, in the "Ultimate Source"
+        # and "Via" columns the manual sheet actually has. The difference
+        # between the two modes is presentational, and this is the parameter
+        # that says so.
+        unified = assemble.chain_views(assemble.resolve_universal(
+            claims, order.stage_names(derived), derived.depths, chain_depth=1))
+        # Does a view's position in the graph agree with the statement it was
+        # classified by? Two independent answers to the same question.
+        stage_audit = order.audit(
+            derived, [(c.subject_table, kinds.get(c.kind).stage) for c in claims],
+            assemble.stages_in(unified))
+        if assembler == "both":
+            diff_report = assembler_diff(records, unified)
+        else:
+            records = unified
+
     source_errors = [f"{Path(r['path']).name}: {e}"
                      for r in store.reports for e in r.get("errors", [])]
     source_errors += [
@@ -387,6 +578,10 @@ def build_views(args):
         "views_chained_to_origin": chained,
         "source_errors": source_errors,
     }
+    if stage_audit:
+        report["stage_order"] = stage_audit
+    if diff_report:
+        report["assembler_diff"] = diff_report
     # Per-stage detail only when there IS more than one; with a single kind it
     # would be a verbatim copy of "coverage" sitting under a second name,
     # which invites a reader to look for a difference that cannot exist.
@@ -396,6 +591,13 @@ def build_views(args):
             for stage, rs in groups.items()}
 
     blocks = [("View chaining:", {"resolved_through_another_view": chained})]
+    if diff_report:
+        blocks.append(("Assembler comparison (legacy vs unified):", {
+            "agrees": diff_report["agrees"],
+            "identical": diff_report["identical"],
+            "differing": diff_report["differing"],
+            "only_legacy": diff_report["only_in_legacy"],
+            "only_unified": diff_report["only_in_unified"]}))
     if len(groups) > 1:
         blocks.append(("Per produced stage (each judged on its own stages):", {
             stage: f"{len(rs)} records, "
@@ -410,6 +612,81 @@ def build_views(args):
               "descriptions are reported but not written to views.xlsx")
     finish(records, report, args, emit.write_view_workbook, blocks,
            overlay=overlay)
+
+
+def build_docs(args):
+    """A dictionary from prose alone — the case that used to come back empty.
+
+    Point the old program at a folder of PDFs and it produced nothing: three of
+    five kinds made lineage, and the one that read documents made descriptions
+    only and never reached the assembler. So a PDF could add meaning to a field
+    Excel or SQL had already found, but could not discover a field or contribute
+    a chain.
+
+    Nothing here is special-cased for prose. The documents are split into
+    sections, each section is read on its own under the doc_lineage contract,
+    and the resulting claims go through the SAME pool, the same order
+    derivation and the same assembler the other two modes now use. What differs
+    is only what a document can honestly offer: no completeness anchor, and a
+    subject read from a caption rather than from a sheet name.
+    """
+    root = Path(args.docs)
+    if root.is_dir():
+        docs = [p for p in sorted(root.rglob("*"))
+                if p.is_file() and readers.for_path(p)
+                and p.suffix.lower() not in (".sql", ".txt")]
+    else:
+        docs = [root]
+    if not docs:
+        print(f"No readable documents under {args.docs}. "
+              f"This build reads: {sorted(readers.readable_extensions())}")
+        sys.exit(1)
+
+    store = RecordStore(load_schemas(), cache_path=args.cache)
+    print(f"Documents: {len(docs)} file(s)")
+    claims, read = doc_claims(store, docs)
+
+    derived = order.derive(claims)
+    # No layout to borrow names from — this is the corpus that never had one,
+    # and order.py is what replaces it. Names come from the tables themselves
+    # where they share a prefix, and are positional where they do not.
+    stages = order.stage_names(derived)
+    records = assemble.chain_views(
+        assemble.resolve_universal(claims, stages, derived.depths))
+
+    source_errors = [f"{Path(r['path']).name} [{r['sheet']}]: {e}"
+                     for r in store.reports for e in r.get("errors", [])]
+    groups = assemble.records_by_produced_stage(records)
+    stages_for = {stage: assemble.stages_in(rs) for stage, rs in groups.items()}
+    untrusted = mapping.untrusted(claims)
+    report = {
+        "mode": "docs",
+        "documents": read,
+        "files_read": len(store.reports),
+        "files_converted": store.converted,
+        "sources": store.reports,
+        "claims": len(claims),
+        # How much of this dictionary rests on a table name a model read out of
+        # a caption rather than on a file fact. For prose that is all of it, and
+        # saying so is the point: the other two modes stamp their subject from a
+        # sheet name or a CREATE line, and a reader is entitled to know that
+        # this one cannot.
+        "subject_from_text": len(untrusted),
+        "stage_order": order.audit(derived, [], stages),
+        "coverage": coverage_metrics(records, stages, stages_for),
+        "chain_diagnostics": chain_diagnostics(records, stages, stages_for),
+        "source_errors": source_errors,
+    }
+
+    blocks = [("Documents:", {
+        "files": len(docs), "sections": sum(d.get("sections", 0) for d in read),
+        "mapping claims": len(claims),
+        "subject read from text": f"{len(untrusted)}/{len(claims)}"}),
+        ("Stage order (derived — prose declares none):", {
+            "stages": " -> ".join(stages) or "(none)",
+            "cycles_broken": report["stage_order"]["cycles_broken"]})]
+    finish(records, report, args, emit.write_workbook, blocks,
+           overlay=load_overlay(args, stages))
 
 
 def run(args):
@@ -430,7 +707,7 @@ def run(args):
         else:
             print("\nNothing has been applied. Re-run with --survey-out FILE "
                   "to save this, or pass an existing layout with --layout.")
-        if not (args.sql or args.archive):
+        if not (args.sql or args.archive or getattr(args, 'docs', None)):
             return
 
     # The rules document describes the FORMATS, not a run, so it needs neither
@@ -442,15 +719,47 @@ def run(args):
                                          if v.reader == kinds.EXCEL]))
         print(f"Rules document: {count} rule(s) across "
               f"{len(kinds.KINDS)} format(s), {excel} of them Excel -> {path}")
-        if not (args.sql or args.archive):
+        if not (args.sql or args.archive or getattr(args, 'docs', None)):
+            return
+
+    # Generating a contract describes a FORMAT, not a run, so it needs neither
+    # an archive nor a mode — the same standing --survey and --rules-doc have.
+    if getattr(args, "generate_template", None):
+        target = Path(OUT_DIR) / "generated"
+        target.mkdir(parents=True, exist_ok=True)
+        name = Path(args.generate_template[0]).stem.replace(" ", "_")[:40]
+        path = target / f"{name}_template.py"
+        if not templates.templategen_available():
+            print("Cannot generate a contract: docling-graph is not installed "
+                  "in this build. It pulls docling and LiteLLM behind it, and "
+                  "the small deployment ships without them on purpose.")
+            sys.exit(1)
+        try:
+            result = templates.generate_module(args.generate_template, name, path)
+        except Exception as exc:
+            print(f"Template generation failed: {type(exc).__name__}: {exc}")
+            sys.exit(1)
+        print(f"Verification passed: {result.verification.passed}")
+        if result.gaps:
+            print(f"  {len(result.gaps)} gap(s) the induction could not settle:")
+            for gap in result.gaps[:5]:
+                print(f"    - {gap}")
+        print(f"  written to: {result.written_path or '(nothing — verification failed)'}")
+        print("\nRead it before adopting it. A generated contract goes into the "
+              "prompt verbatim, so it changes what every extraction under it "
+              "means; templates.register_generated is the deliberate step that "
+              "puts its hash into the cache key.")
+        if not (args.sql or args.archive or getattr(args, 'docs', None)):
             return
 
     apply_mode_defaults(args)
     check_output_paths(args)
     if args.sql:
         return build_views(args)
+    if getattr(args, "docs", None):
+        return build_docs(args)
     if not args.archive:
-        print("Give either --archive DIR or --sql DIR"); sys.exit(1)
+        print("Give one of --archive DIR, --sql DIR or --docs DIR"); sys.exit(1)
     try:
         layout = load_layout(args.archive, args.layout)
     except (LayoutError, ValueError) as exc:
@@ -470,7 +779,8 @@ def run(args):
     if missing:
         print("Not in the archive: " + ", ".join(missing)); sys.exit(1)
 
-    store = RecordStore(load_schemas(), cache_path=args.cache)
+    store = RecordStore(load_schemas(), cache_path=args.cache,
+                        anchors=header_anchors(layout))
     cloud_path = find_cloud_workbook(args.archive, layout)
     print(f"Archive: {len(catalog)} tables indexed | building {len(targets)}")
 
@@ -490,6 +800,31 @@ def run(args):
         records += assemble.resolve_table(table, catalog, store, cloud_index,
                                           cloud_stage(layout), table_prefixes(layout))
 
+    # The unified assembler, run alongside the legacy one or in its place. Both
+    # read the SAME store, so running both costs no extra API call — the second
+    # pass is served entirely from memory.
+    assembler = getattr(args, "assembler", "legacy") or "legacy"
+    stage_audit = diff_report = None
+    if assembler != "legacy":
+        claims, pairs = archive_claims(catalog, store, targets)
+        derived = order.derive(claims)
+        # The DECLARED names still label the stages. compare.py keys every
+        # archive row on dwh_table/dwh_column and lays its columns out by stage
+        # position, so a derived label would score zero for reasons that have
+        # nothing to do with lineage. What the derivation is for here is the
+        # audit below — the first check in this program that can catch a wrong
+        # stage ORDER, which passes fidelity and completeness today.
+        stages = order.stage_names(derived, layout["stages"])
+        unified = assemble.resolve_universal(
+            claims, stages, derived.depths, subjects=targets,
+            cloud_index=cloud_index, cloud_stage=cloud_stage(layout),
+            table_prefixes=table_prefixes(layout))
+        stage_audit = order.audit(derived, pairs, layout["stages"])
+        if assembler == "both":
+            diff_report = assembler_diff(records, unified)
+        else:
+            records = unified
+
     # Per-source checkpoints, gathered from every file the run actually read.
     source_errors = [f"{Path(r['path']).name} [{r['sheet']}]: {e}"
                      for r in store.reports for e in r.get("errors", [])]
@@ -508,6 +843,11 @@ def run(args):
         "source_errors": source_errors,
     }
 
+    if stage_audit:
+        report["stage_order"] = stage_audit
+    if diff_report:
+        report["assembler_diff"] = diff_report
+
     chain = report["chain_diagnostics"]
     # The overlay is loaded against the LAYOUT's stage list, which is what the
     # field keys were computed under.
@@ -516,8 +856,23 @@ def run(args):
     if overlay is not None:
         emitter = lambda recs, path: emit.write_workbook(recs, path,
                                                          overlay=overlay)
+    blocks = []
+    if stage_audit:
+        blocks.append(("Stage order (derived from the claims, not declared):", {
+            "derived": " -> ".join(stage_audit["derived_order"]) or "(none)",
+            "declared": " -> ".join(stage_audit["declared_order_of_produced"]) or "(none)",
+            "agrees": stage_audit["agrees"],
+            "conflicts": stage_audit["conflict_count"],
+            "cycles_broken": stage_audit["cycles_broken"]}))
+    if diff_report:
+        blocks.append(("Assembler comparison (legacy vs unified):", {
+            "agrees": diff_report["agrees"],
+            "identical": diff_report["identical"],
+            "differing": diff_report["differing"],
+            "only_legacy": diff_report["only_in_legacy"],
+            "only_unified": diff_report["only_in_unified"]}))
     finish(records, report, args, emitter,
-           [("Chain diagnostics:", {
+           blocks + [("Chain diagnostics:", {
                "complete_chains": f"{chain['complete_chains']}/{chain['chains']}",
                "unmatched_tails": chain["unmatched_tails"]["count"],
                "unmatched_heads": chain["unmatched_heads"]["count"]})],

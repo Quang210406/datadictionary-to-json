@@ -46,7 +46,8 @@ DERIVED = "derived insight"
 # Human names for the formats, since "hop_spec" means nothing to a reader who
 # has not read the code.
 FORMATS = {
-    "doc_prose": "PDF / Word — prose design document",
+    "doc_prose": "PDF / Word — prose design document, read for meanings",
+    "doc_lineage": "PDF / Word — prose design document, read for mappings",
     "hop_spec": "Excel — hop specification sheet",
     "cloud_sheet": "Excel — cloud reference sheet",
     "view_sql": "SQL — CREATE VIEW script",
@@ -130,6 +131,44 @@ WHERE = {
             "The 'Mô tả' column — the ONLY place in the whole archive that "
             "states a field's business meaning. This is why 59 of 70 fields "
             "arrive described and the rest arrive blank."),
+    },
+    "doc_lineage": {
+        "target_table": (
+            "Table", "name", STRUCTURE,
+            "The caption of the mapping table, the section heading above it, or "
+            "the surrounding sentence. A document has no sheet name to fall "
+            "back on, so unlike a hop spec this really is read from the text — "
+            "which is why a claim built from it is marked subject_trusted=False "
+            "and counted separately in the report. Null where the document "
+            "names a field but never its table; never guessed from the field."),
+        "target_column": (
+            "Column", "name", TABLE_DATA,
+            "The target-side column of a mapping table row, or the field named "
+            "as being loaded in a sentence. This is the join key and the one "
+            "value that may not be null."),
+        "source_table": (
+            "Lineage", "source table", TABLE_DATA,
+            "The source-side table of the same row, or the table named as the "
+            "origin in the sentence. Null when the document states a source "
+            "column without saying which table holds it."),
+        "source_column": (
+            "Lineage", "source column", TABLE_DATA,
+            "The source-side column of the same row. n-1 is expressed as "
+            "several records sharing one target_column, one per source field."),
+        "transformation_logic": (
+            "Lineage", "transformation", DERIVED,
+            "The stated rule or expression, copied as written — a trim, a date "
+            "conversion, a CASE. Null when the document states the mapping but "
+            "no rule. Never a description of what the field MEANS: that is a "
+            "different claim, read under doc_prose, and putting it here would "
+            "file an explanation where an expression belongs."),
+        "section": (
+            "Lineage", "evidence", STRUCTURE,
+            "Where in the document the mapping was found: the nearest heading, "
+            "the table caption, or the page marker the reader inserts "
+            "(\"--- trang N ---\") when nothing else names the place. It is "
+            "what makes a prose claim checkable at all — a 138-page PDF cited "
+            "as a whole is not evidence a reviewer can act on."),
     },
     "doc_prose": {
         "table": (

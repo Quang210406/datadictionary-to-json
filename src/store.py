@@ -16,6 +16,8 @@ from pathlib import Path
 
 import kinds
 import readers
+import sections
+import templates
 from agent import convert
 from extract import (read_excel_df, df_to_text, expected_row_count,
                      read_sql_text, expected_column_count)
@@ -33,18 +35,39 @@ from validate import (validate_document_input, validate_input,
 # registered, and it is the reader choice that also settles the other two
 # things differing between the branches: which completeness anchor applies
 # (a row count vs a declared column list) and which checkpoint-1 check runs.
-def _read_source(path, sheet, kind):
+def _read_source(path, sheet, kind, document_text=None, anchors=None):
     reader = kinds.get(kind).reader
     if reader == kinds.EXCEL:
         df = read_excel_df(path, sheet)
-        return df_to_text(df), expected_row_count(df, kind), validate_input(df)
+        return (df_to_text(df),
+                expected_row_count(df, kind, anchors),
+                validate_input(df))
     if reader == kinds.DOCUMENT:
         # Whichever reader is installed and best for this format — see
         # readers.py. There is no completeness anchor: nothing in a design
         # document states how many field definitions it ought to contain, so
         # the count is reported as "not checked" rather than invented.
-        text = readers.read(path)
-        return text, None, validate_document_input(text)
+        #
+        # `sheet` carries the SECTION id here, exactly as it carries a sheet
+        # name for a workbook. None means the whole document, which is what
+        # doc_prose has always asked for and what keeps its cached extractions
+        # valid. A named section means send that section alone — see
+        # sections.py for why a 211,648-character document cannot be one call.
+        whole = document_text if document_text is not None else readers.read(path)
+        if sheet is None:
+            return whole, None, validate_document_input(whole)
+        for section_id, body in sections.split(whole):
+            if section_id == sheet:
+                return body, None, validate_document_input(body)
+        # A named section that is not in the split is a bug in the caller, not
+        # a bad document: the ids come from sections.split in the first place.
+        # Failing loudly beats extracting the whole document under a label
+        # claiming it was one part of it.
+        return "", None, [
+            f"section {sheet!r} is not in {Path(path).name}; the document "
+            "splits into "
+            f"{[i for i, _ in sections.split(whole)][:5]}... — the caller and "
+            "the splitter disagree."]
     text = read_sql_text(path)
     # A SQL object's completeness anchor is its declared column list, not a row
     # count. The kind goes to checkpoint 1 as well, so a file about to be read
@@ -53,12 +76,20 @@ def _read_source(path, sheet, kind):
 
 
 class RecordStore:
-    def __init__(self, schemas, cache_path=None, verbose=True):
+    def __init__(self, schemas, cache_path=None, verbose=True,
+                 anchors=None):
         self.schemas = schemas
         self.cache_path = Path(cache_path) if cache_path else None
         self.verbose = verbose
+        # {kind -> header anchors} this archive declares, from its layout.
+        # Empty means the registry's defaults apply.
+        self.anchors = anchors or {}
         self.reports = []          # one per file actually converted
         self._memory = {}          # (path, sheet, kind) -> records
+        # Converted document text, per PATH. docling takes 719 s on the
+        # 138-page design document; a 20-section document that re-converted
+        # per section would cost four hours instead of twelve minutes.
+        self._text = {}            # path -> whole document text
         self._disk = {}
         if self.cache_path and self.cache_path.exists():
             raw = json.loads(self.cache_path.read_text(encoding="utf-8"))
@@ -80,7 +111,12 @@ class RecordStore:
         API key of their own.
         """
         digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
-        return f"{kind}|{digest}|{sheet}"
+        # The contract tag is empty for every shipped kind, so every key this
+        # program has ever written is unchanged and no cached extraction is
+        # re-paid for. It is non-empty only for a contract generated at run
+        # time, which the prompt embeds and which the key would otherwise
+        # ignore — see templates.contract_tag.
+        return f"{kind}{templates.contract_tag(kind)}|{digest}|{sheet}"
 
     @staticmethod
     def _migrate(disk):
@@ -122,7 +158,9 @@ class RecordStore:
                                  **report, "cached": True})
             return records
 
-        text, expected, errors = _read_source(path, sheet, kind)
+        text, expected, errors = _read_source(
+            path, sheet, kind, self._document_text(path, kind),
+            self.anchors.get(kind))
         if errors:
             # Checkpoint 1 failed: report it and treat the file as empty
             # rather than aborting a run that spans dozens of workbooks.
@@ -162,6 +200,27 @@ class RecordStore:
                            "expected_count": expected}
         self._flush()
         return records
+
+    def _document_text(self, path, kind=None):
+        """The whole document as text, converted at most once per run.
+
+        Returns None for a non-document kind so `_read_source` keeps its own
+        behaviour for spreadsheets and .sql files — this is a document-only
+        optimisation and should not quietly become a second reader dispatch.
+        """
+        if kind is not None and kinds.get(kind).reader != kinds.DOCUMENT:
+            return None
+        if path not in self._text:
+            self._text[path] = readers.read(path)
+        return self._text[path]
+
+    def sections(self, path) -> list:
+        """[(section id, text)] for one document, converting it once.
+
+        The caller passes each id back as the `sheet` argument of records(),
+        which is why the ids have to be stable: they are cache keys.
+        """
+        return sections.split(self._document_text(path))
 
     def _flush(self):
         if self.cache_path:

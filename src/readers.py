@@ -28,6 +28,7 @@ exactly that. It is reported, not silently skipped, because a document nobody
 can read is a fact about the archive that somebody should know.
 """
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Tuple
@@ -118,7 +119,36 @@ def _read_docling(path):
     handover.
     """
     from docling.document_converter import DocumentConverter
-    return DocumentConverter().convert(str(path)).document.export_to_markdown()
+    text = DocumentConverter().convert(str(path)).document.export_to_markdown()
+    return _unescape_markdown(text)
+
+
+# Markdown escapes docling adds when exporting. Measured, not assumed: a heading
+# comes back as `### Bang DWH\_ORDER` while the same name inside a table cell
+# comes back as `DWH_ORDER`, unescaped.
+#
+# That asymmetry is a live hazard for this program specifically. The doc_lineage
+# prompt tells the model to take a target table from a section heading or table
+# caption, because prose often names the table once, above the grid. So the
+# model reads `DWH\_ORDER` and has two bad options: copy it verbatim, giving an
+# identifier with a backslash that joins to nothing, or clean it up, at which
+# point the fidelity check looks for `DWH_ORDER` in the source text, does not
+# find it, and reports a fabrication that never happened.
+#
+# Every table name in this corpus contains an underscore, so this is the common
+# case rather than an edge one. Undone here, in the reader, because it is a
+# property of how docling serialises — not something the prompt or the checks
+# should have to know about.
+_MD_ESCAPE = re.compile(r"\\([\\`*_{}\[\]()#+\-.!|~])")
+
+
+def _unescape_markdown(text: str) -> str:
+    """docling's markdown escaping, undone.
+
+    Only a backslash before a character markdown actually escapes is removed, so
+    a genuine backslash in the source (a Windows path, a regex) survives.
+    """
+    return _MD_ESCAPE.sub(r"\1", text or "")
 
 
 class NoTextLayer(ValueError):

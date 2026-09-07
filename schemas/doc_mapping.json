@@ -1,0 +1,51 @@
+{
+  "$comment": "A mapping claim a prose document (PDF, Word) actually states: THIS column is loaded from THAT column. Distinct from doc_description, which captures what a field MEANS — a design document does both and they are different claims with different evidence. One record per (target field, source field) pair, so n-1 is several records sharing one target_column. No datatypes: where a document states them it states them as prose, and a guessed type is worse than a missing one. target_table is nullable because a mapping table often names the target once in a caption and never again per row; unlike a workbook there is no sheet name to fall back on, so a null here is honest and the assembler records that the subject came from a cell.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "target_table": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "target_column": {
+        "type": "string"
+      },
+      "source_table": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "source_column": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "transformation_logic": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "section": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "target_table",
+      "target_column",
+      "source_table",
+      "source_column",
+      "transformation_logic",
+      "section"
+    ],
+    "additionalProperties": false
+  }
+}

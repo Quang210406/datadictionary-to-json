@@ -33,7 +33,7 @@ import re
 from collections import Counter
 from pathlib import Path
 
-from catalog import table_of
+from catalog import tables_of
 from layout import LayoutError, validate_layout
 
 # Folder-name tokens that conventionally mean a pipeline stage. Used only to
@@ -71,8 +71,12 @@ def survey(archive_dir, non_hop_sheets=("DDL",)) -> dict:
                  if not p.name.startswith("~$")]
         tables = []
         for book in books:
-            table, _ = table_of(book, skip)
-            if table:
+            # EVERY hop sheet, not just the first. A workbook holding several
+            # table sheets would otherwise be reported as holding one, and the
+            # survey's whole job is to say what is actually there.
+            for table, _ in tables_of(book, skip):
+                if not table:
+                    continue
                 tables.append(table)
                 match = TABLE_PREFIX.match(table)
                 if match:
@@ -191,6 +195,15 @@ def propose(facts) -> dict:
     stage_of = dict(zip(order, stages))
     hops = [{"dir": d, "from": stage_of[a], "to": stage_of[b]}
             for d, (a, b) in chosen.items()]
+    # In PIPELINE order, not the order the folders happened to be scanned in.
+    # `layout.final_hop_dir` reads hops[-1] to decide which tables a run builds
+    # by default, so an alphabetically-ordered list makes the program build the
+    # tables written by the FIRST hop — the wrong end of the pipeline. The
+    # prose above already states the right order; only the JSON disagreed, and
+    # the symptom is a run that reports 0% complete chains for no visible
+    # reason.
+    hops.sort(key=lambda h: stages.index(h["from"]) if h["from"] in stages
+              else len(stages))
 
     # Corroboration: the tables in a folder should carry the prefix of the
     # stage it writes INTO. Reported, never used to override the names.

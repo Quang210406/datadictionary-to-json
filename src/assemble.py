@@ -30,12 +30,23 @@ def _normalize(value):
     return value.strip().upper() if isinstance(value, str) else None
 
 
+def table_key(table):
+    """The single definition of "the same table".
+
+    Pulled out of field_key rather than written beside it. order.py joins on
+    table names alone — a stage graph has no column half — and a second copy of
+    a matching rule is precisely how target_key came to exist twice, drifted,
+    and made one of its two callers look broken to a reviewer.
+    """
+    return _normalize(table)
+
+
 def field_key(table, column):
     """The single definition of "the same field"; every match uses it."""
     normalized_column = _normalize(column)
     if not normalized_column:
         return None
-    return (_normalize(table), normalized_column)
+    return (table_key(table), normalized_column)
 
 
 def stages_in(records) -> list:
@@ -113,15 +124,26 @@ def target_key(record):
     chain = record.get("lineage") or []
     if not chain:
         return None
-    last = chain[-1]
-    key = (last.get("table"), last.get("column")) if last.get("stage") != "cloud" else None
-    # A later warehouse entry wins, matching the order the chain is built in.
-    # "dwh" and "cloud" are the only stage names any of this knows by name;
-    # everything else derives the stage list from the records themselves.
+    # STRUCTURAL, not by stage name. The rule is "the last entry this chain
+    # actually PRODUCED", and an entry is produced exactly when something fed
+    # it — which is what a non-empty `sources` means. The landed copy at the
+    # end of an archive chain carries `sources: []` because it is the same
+    # field written somewhere else rather than a field derived from anything,
+    # so it is skipped for free; an origin entry also has no sources but is
+    # never last.
+    #
+    # This used to look for the literal stage names "dwh" and "cloud", which
+    # were the last two archive-specific strings left in the assembler. Under
+    # any other pipeline the "warehouse entry wins" rule silently did not
+    # apply. `emit._tail` already located the produced entry this exact way, so
+    # this is one definition replacing two rather than a new rule.
+    produced = None
     for entry in chain:
-        if entry.get("stage") == "dwh":
-            key = (entry.get("table"), entry.get("column"))
-    return key
+        if entry.get("sources"):
+            produced = entry
+    if produced is None:
+        return None
+    return (produced.get("table"), produced.get("column"))
 
 
 def target_entry(record):
@@ -430,3 +452,215 @@ def chain_views(view_records) -> list:
                 "via": via,
             }
     return merged
+
+
+# ------------------------------------------------------- the unified path
+#
+# One assembler for every format, built on mapping.Claim.
+#
+# `resolve_table` and `resolve_view` were "intentionally separate: same shape,
+# different algorithms". Tracing them against the claim pool says something
+# sharper — the ALGORITHM is the same, and only the PRESENTATION differs.
+#
+# Both corpora state exactly one hop per file. The archive says STG -> DWH in
+# one workbook and SRC -> STG in another; a .sql file says source -> view. In
+# both, the longer chain is built by joining files, and in both that join is
+# deterministic Python. The difference is only where the joined result is
+# WRITTEN: the archive's hand-built dictionary shows it as further lineage
+# stages, and the SQL one shows it in "Ultimate Source" / "Via" columns, which
+# is what `chain_views` fills in as `resolved_source`.
+#
+# That is a property of two hand-built spreadsheets, not of the data, so it is
+# a parameter here rather than a second algorithm. `chain_depth` says how far a
+# chain may be written into `lineage`; whatever is left is still followed, and
+# still reported, by chain_views.
+
+
+def _claim_source(claim) -> dict:
+    """The `sources` entry for one claim, in the shape its kind has always used.
+
+    Two shapes, because entities.ABSENT distinguishes "this kind of source has
+    no such thing" from "it has one and it is empty" — a hop specification names
+    a table and a column and has no concept of a schema or an alias, and putting
+    `"schema": null` into archive records would change a published artefact to
+    make this function's life easier.
+    """
+    if claim.kind == "hop_spec":
+        return {"table": claim.source_table, "column": claim.source_column,
+                "transformation_type": claim.transformation_type,
+                "transformation_logic": claim.transformation_logic,
+                "role": claim.source_role or "value"}
+    return {"schema": claim.source_schema, "table": claim.source_table,
+            "column": claim.source_column, "alias": claim.source_alias,
+            "transformation_type": claim.transformation_type,
+            "transformation_logic": claim.transformation_logic,
+            "role": claim.source_role or "value"}
+
+
+def stage_of(claim, stages, depths):
+    """The stage the object this claim produces sits at.
+
+    Three mechanisms, in order of how much the answer is actually KNOWN:
+
+      1. the file states it — a CREATE VIEW produces a "view", and
+         kinds.SourceKind.stage reads that off the same string classification
+         matched on, so the label and the reason for it cannot disagree
+      2. the layout declares it — an Excel workbook borrows a name from the
+         folder it sits in, via the position its subject occupies
+      3. the graph derives it — which is all prose has, and is why order.py
+         exists at all
+
+    Before this there was no third mechanism and no ordering between the first
+    two; five of seven `_entry` call sites simply took the layout's word.
+    """
+    stated = kinds.get(claim.kind).stage
+    if stated:
+        return stated
+    depth = depths.get(table_key(claim.subject_table))
+    if depth is None or depth >= len(stages):
+        return stages[-1] if stages else "target"
+    return stages[depth]
+
+
+def _source_stage(claim, stages, depths):
+    """The stage the field this claim READS FROM sits at.
+
+    Three answers, and the order between them was found by diffing this against
+    resolve_table rather than reasoned out in advance:
+
+      1. the claim's own SUBJECT is placed: a claim asserts a HOP, so its
+         source sits exactly one position upstream, by definition of the word
+      2. the graph knows where that table sits independently — use that
+      3. neither — the chain starts here, which is what "source" has meant
+         since assemble.SOURCE_STAGE was written down
+
+    The order between 1 and 2 was found by diffing the two assemblers, not
+    reasoned out in advance, and getting it backwards costs five records.
+
+    A table that appears ONLY as a source has longest-path depth 0, because
+    nothing in the pool produces it — but that is ambiguous. It may be a true
+    origin, or it may be a staging table whose own workbook is simply not in
+    this run. The graph cannot tell those apart; the claim can, because the
+    file it came from asserts a single hop between these two specific tables.
+    So the local evidence wins over the global aggregate. This is the same
+    knowledge the catalog walk got for free from a hop folder declaring BOTH
+    of its stages, recovered without the folder.
+    """
+    # A file that states its own produced stage also states where its inputs
+    # are: whatever statement a .sql file holds, the things it reads FROM are
+    # physical objects outside the file, so every SQL record starts at the
+    # origin. That is assemble.SOURCE_STAGE's original argument, and it has to
+    # be checked before the graph — a view reading another view puts that
+    # upstream view at depth 1, and deriving from depth would then label it
+    # something other than "source" while resolve_view called it "source".
+    if kinds.get(claim.kind).stage:
+        return SOURCE_STAGE
+    subject_depth = depths.get(table_key(claim.subject_table))
+    if subject_depth is not None and 0 < subject_depth <= len(stages):
+        return stages[subject_depth - 1]
+    depth = depths.get(table_key(claim.source_table))
+    if depth is not None and depth < len(stages):
+        return stages[depth]
+    return stages[0] if stages else SOURCE_STAGE
+
+
+def _walk_claims(table, column, index, stages, depths, depth, seen, budget):
+    """Entries upstream of (table, column), nearest stage last.
+
+    The join is now symmetric. `_walk_back` looked the table half up in the
+    catalog and compared the column half as a string, because the per-row table
+    cell could not be trusted; mapping.py stamps a trustworthy subject before
+    anything is pooled, so both halves are one `field_key` lookup — which is
+    also what restores the scoping a global pool would otherwise lose, since two
+    tables sharing a column called ID no longer collide.
+    """
+    key = field_key(table, column)
+    if depth >= MAX_DEPTH or budget <= 0 or key is None or key in seen:
+        return []
+    matches = index.get(key)
+    if not matches:
+        return []
+    seen = seen | {key}
+    # The nearest source line, as before. `mapping.ordered` makes "first" mean
+    # something once claims from different files share a pool; the wider fan-in
+    # is reported by mapping.fan_in rather than absorbed here.
+    claim = matches[0]
+
+    entry = _entry(stage_of(claim, stages, depths), claim.subject_table, column,
+                   claim.target_datatype, claim.target_size,
+                   claim.evidence_path, [_claim_source(claim)])
+    entry["doc_link"] = claim.evidence_section if claim.kind == "doc_lineage" else None
+
+    upstream = _walk_claims(claim.source_table, claim.source_column, index,
+                            stages, depths, depth + 1, seen, budget - 1)
+    if not upstream and claim.source_column:
+        upstream = [_entry(_source_stage(claim, stages, depths),
+                           claim.source_table, claim.source_column,
+                           claim.source_datatype, claim.source_size,
+                           claim.evidence_path, [],
+                           claim.source_schema if claim.kind != "hop_spec" else None)]
+    return upstream + [entry]
+
+
+def resolve_universal(claims, stages, depths, index=None, subjects=None,
+                      chain_depth=MAX_DEPTH, cloud_index=None,
+                      cloud_stage="cloud", table_prefixes=()) -> list:
+    """One lineage record per claim, for claims about the subjects asked for.
+
+    `subjects` limits which objects are built, the way --table does today; None
+    builds everything the pool produces. `chain_depth` is the presentation
+    choice described above: MAX_DEPTH writes the whole joined chain into
+    `lineage`, 1 writes a single hop and leaves the rest to chain_views.
+    """
+    import mapping
+
+    index = index if index is not None else mapping.index_by_produced(claims, field_key)
+    wanted = {table_key(s) for s in subjects} if subjects else None
+    cloud_index = cloud_index or {}
+
+    out = []
+    for claim in mapping.ordered(claims):
+        if wanted is not None and table_key(claim.subject_table) not in wanted:
+            continue
+        column = claim.target_column
+        if not column:
+            continue
+
+        # No schema on the produced entry, deliberately. A SQL record states a
+        # schema for the object it READS FROM ("CRMDB_UAT.party_addr C"); the
+        # object being created is named by the CREATE line without one. Copying
+        # the source's schema onto the target would assert the two live in the
+        # same schema, which is the opposite of what a cross-schema view says.
+        entry = _entry(stage_of(claim, stages, depths), claim.subject_table,
+                       column, claim.target_datatype, claim.target_size,
+                       claim.evidence_path, [_claim_source(claim)])
+        # A prose claim carries the heading it was read under. This is the first
+        # value doc_link has ever held: an archive row's evidence is the file,
+        # but a 138-page PDF cited as a whole is not evidence anyone can act on.
+        entry["doc_link"] = claim.evidence_section if claim.kind == "doc_lineage" else None
+
+        upstream = _walk_claims(claim.source_table, claim.source_column, index,
+                                stages, depths, 1,
+                                {field_key(claim.subject_table, column)},
+                                chain_depth - 1)
+        if not upstream and claim.source_column:
+            upstream = [_entry(_source_stage(claim, stages, depths),
+                               claim.source_table, claim.source_column,
+                               claim.source_datatype, claim.source_size,
+                               claim.evidence_path, [],
+                               claim.source_schema if claim.kind != "hop_spec" else None)]
+
+        lineage = upstream + [entry]
+
+        detail = _cloud_lookup(cloud_index, claim.subject_table, column,
+                               table_prefixes)
+        description = None
+        if detail:
+            lineage.append(_entry(cloud_stage, detail.get("table"),
+                                  detail.get("column"), detail.get("datatype"),
+                                  detail.get("size"), detail.get("path"), []))
+            lineage[-1]["constraint"] = detail.get("nullable")
+            description = detail.get("description")
+
+        out.append({"description": description, "lineage": lineage})
+    return out

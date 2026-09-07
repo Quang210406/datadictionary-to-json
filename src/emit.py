@@ -6,6 +6,7 @@ columns, same order.
 """
 
 import re
+from collections import Counter
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -43,7 +44,62 @@ TAIL_COLS = ["Mô Tả", "transformation logic", "Logic Notes", "Join / Depends-
 WIDTHS = {1: 22, 2: 22, 3: 46, 4: 11, 5: 7, 6: 26, 7: 24, 8: 46, 9: 11, 10: 7,
           11: 20, 12: 18, 13: 48, 14: 11, 15: 7, 16: 20, 17: 18, 18: 60, 19: 11,
           20: 7, 21: 30, 22: 20, 23: 44, 24: 40}
-TABLE_TOKEN = re.compile(r"\b(?:STG|DWH|SRC)_[A-Z0-9_]{3,}\b", re.I)
+# Table names mentioned inside a transformation rule, for the
+# "Join / Depends-on" column. Built from the names THIS dictionary actually
+# contains rather than from a fixed prefix list: the old pattern hardcoded
+# STG|DWH|SRC and so produced a silently empty column for any corpus whose
+# tables are named anything else. A corpus is not obliged to prefix its tables,
+# and a blank column reads as "nothing depends on anything" rather than as
+# "this check does not apply here".
+def table_pattern(lineage_records):
+    """A regex matching any table name these records know, longest first."""
+    names = set()
+    for record in lineage_records:
+        for entry in record.get("lineage") or []:
+            if entry.get("table"):
+                names.add(entry["table"].strip())
+            for source in entry.get("sources") or []:
+                if source.get("table"):
+                    names.add(source["table"].strip())
+    names = {n for n in names if len(n) >= 3}
+    if not names:
+        return None
+
+    # Two halves, and the second is not optional.
+    #
+    # Known names alone lose the most interesting case: a table named in a
+    # transformation rule that the dictionary has NOT otherwise seen — an
+    # undiscovered dependency, which is precisely what this column is for.
+    # Measured when this was names-only: 2 of 83 rows lost a real dependency
+    # (a table mentioned in prose and nowhere else).
+    #
+    # So also match anything shaped like a qualified table name, using the
+    # prefixes THIS corpus actually uses rather than a hardcoded STG|DWH|SRC.
+    # A corpus with no prefix convention contributes none and falls back to
+    # known names, which is the honest answer there.
+    # A prefix counts only when it is a CONVENTION — shared by at least this
+    # many distinct tables. "Text before the first underscore" is not a stage
+    # prefix on its own: raw source tables here are CANBO_VCB, CIF_ADDRESS,
+    # DMS_..., and treating each as a prefix matched far too much. Measured
+    # against the pattern this replaces, on the real archive:
+    #
+    #   every prefix (>=1):  45/83 rows identical  — far too broad
+    #   >=2:                 47/83
+    #   >=3:                 83/83                 — exact
+    #
+    # So three. It reproduces the old STG|DWH|SRC behaviour on this corpus
+    # without naming it, and a corpus with no naming convention contributes no
+    # prefixes and falls back to known names, which is the honest answer there.
+    MIN_TABLES_PER_PREFIX = 3
+    counts = Counter(n.split("_", 1)[0].upper() for n in names if "_" in n)
+    prefixes = {p for p, used in counts.items()
+                if used >= MIN_TABLES_PER_PREFIX and 2 <= len(p) <= 8 and p.isalnum()}
+
+    alts = [re.escape(n) for n in sorted(names, key=lambda n: (-len(n), n))]
+    if prefixes:
+        alts.append(r"(?:%s)_[A-Z0-9_]{3,}"
+                    % "|".join(re.escape(p) for p in sorted(prefixes)))
+    return re.compile(r"\b(?:%s)\b" % "|".join(alts), re.I)
 AUTHORED_COL = descriptions.AUTHORED_COL   # one spelling, declared once
 
 
@@ -67,7 +123,7 @@ def _apply_layout(ws, widths, freeze):
     ws.freeze_panes = freeze
 
 
-def _tail(record, authored=None):
+def _tail(record, authored=None, pattern=None):
     """(description, transformation type, rule, dependencies) for one row.
 
     `authored` is appended as a FIFTH value when a description overlay is in
@@ -82,7 +138,7 @@ def _tail(record, authored=None):
             produced = entry
     source = produced["sources"][0] if produced and produced["sources"] else {}
     logic = source.get("transformation_logic") or ""
-    named = {t.upper() for t in TABLE_TOKEN.findall(logic)}
+    named = {t.upper() for t in (pattern.findall(logic) if pattern else [])}
     named -= {(source.get("table") or "").upper()}
     tail = (record.get("description"), source.get("transformation_type"),
             logic or None, ", ".join(sorted(named)) or None)
@@ -90,6 +146,7 @@ def _tail(record, authored=None):
 
 
 def to_rows(lineage_records, groups, overlay=None) -> list:
+    pattern = table_pattern(lineage_records)
     rows = []
     for record in lineage_records:
         by_stage = {e["stage"]: e for e in record["lineage"]}
@@ -100,7 +157,7 @@ def to_rows(lineage_records, groups, overlay=None) -> list:
                      entry["datatype"], entry["size"]] if entry else [None] * 5)
         authored = None if overlay is None else (
             descriptions.authored_for(record, overlay) or "")
-        rows.append(row + list(_tail(record, authored)))
+        rows.append(row + list(_tail(record, authored, pattern)))
     return rows
 
 

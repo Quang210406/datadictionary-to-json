@@ -43,6 +43,21 @@ DEFAULT_LAYOUT = {
 
     # Sheets inside a hop workbook that are not the hop specification.
     "non_hop_sheets": ["DDL"],
+
+    # Column-header captions, per source kind. Absent here on purpose: the
+    # defaults live in kinds.py and cover this archive. An archive whose sheets
+    # say "Destination Column" / "Origin Table" declares its own, e.g.
+    #
+    #   "header_anchors": {
+    #     "hop_spec": [["target", "destination"], ["source", "origin"]]
+    #   }
+    #
+    # Each inner list is the alternatives for one side; the two sides must
+    # match DIFFERENT cells of the same row. This was the last archive-specific
+    # fact still living in code while every other one had moved here — and the
+    # one whose failure mode is worst, because unrecognised captions do not
+    # fail: they switch the completeness check off, which is the check that
+    # catches a truncated reply.
 }
 
 
@@ -87,7 +102,33 @@ def validate_layout(layout: dict) -> dict:
     cloud = layout.get("cloud") or {}
     if cloud and cloud.get("stage") and cloud["stage"] not in known:
         raise LayoutError(f"cloud stage {cloud['stage']!r} is not in stages {stages}")
+
+    # The same rules kinds._check applies to the built-in anchors, applied to
+    # declared ones. Every one of these failures is silent: a capitalised
+    # anchor never matches because header cells are lower-cased first, and an
+    # empty group can never claim a cell — both end as "no header row found",
+    # which reads as a sheet with no data rather than as a bad config.
+    for kind, groups in (layout.get("header_anchors") or {}).items():
+        if not groups or not all(groups):
+            raise LayoutError(
+                f"header_anchors for {kind!r} has an empty group; it could "
+                "never match a cell, so no header row would ever be found and "
+                "the completeness check would silently stop running.")
+        for group in groups:
+            for word in group:
+                if not isinstance(word, str) or word != word.lower():
+                    raise LayoutError(
+                        f"header_anchors for {kind!r} contains {word!r}; "
+                        "header cells are lower-cased before matching, so "
+                        "anything not lower-case can never match.")
     return layout
+
+
+def header_anchors(layout) -> dict:
+    """{kind -> anchors} this archive declares, as the tuples kinds.py uses."""
+    declared = (layout or {}).get("header_anchors") or {}
+    return {kind: tuple(tuple(group) for group in groups)
+            for kind, groups in declared.items()}
 
 
 def hop_dirs(layout) -> list:

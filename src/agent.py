@@ -199,6 +199,47 @@ Emit an empty array if the document defines no fields at all. That is a
 truthful answer and a common one — most pages of most documents define
 nothing.""",
     },
+    "doc_lineage": {
+        "label": "system or database design document, read for MAPPINGS",
+        "heading": "DOCUMENT TEXT",
+        "body": """This is prose — a design document, a specification, a migration plan — not a
+spreadsheet and not code. It was written for people, so most of it states no
+mapping at all.
+
+Extract ONLY where the document says a field is LOADED FROM another field. One
+record per (target field, source field) pair.
+
+- The richest source is a mapping or interface table: two column groups, one
+  describing the target and one the source, often captioned "Mapping",
+  "Ánh xạ", "Nguồn dữ liệu" or "Interface". Read one record per row.
+- A sentence states a mapping too ("CUST_STATUS được lấy từ CIF.STATUS_CD").
+  Copy the source it names.
+- Prose that merely MENTIONS two tables in one paragraph is NOT a mapping.
+  Neither is a list of tables, a screenshot caption, or a data model diagram
+  that shows a relationship. A foreign key is not a load.
+
+DO NOT extract what a field MEANS here. A sentence explaining the business
+purpose of a column is a description, it is read separately, and a description
+copied into transformation_logic would put an explanation where an expression
+belongs.
+
+- target_table is the table being loaded, when the document says so — a table
+  caption, a section heading, or the surrounding text. Use null when it names a
+  field but never says which table it belongs to. Do NOT guess a table from the
+  field's name, and do NOT reuse the source table for it.
+- ONE ROW MAY PRODUCE SEVERAL RECORDS. A target fed from more than one source
+  field gives one record per source field, all sharing the same target_column,
+  never one record with stacked values.
+- transformation_logic is the stated rule or expression, copied as written
+  ("trim", "convert ddmmyy sang YYYYMMDD", a CASE, a concatenation). Use null
+  when the document states the mapping but no rule.
+- section is where in the document you found it: the nearest heading, table
+  caption, or the page marker ("--- trang 42 ---") if nothing else names the
+  place. This is the evidence trail; be specific rather than tidy.
+
+Emit an empty array if the document states no mappings at all. That is a
+truthful answer and a common one — most pages of most documents map nothing.""",
+    },
     "cloud_sheet": {
         "label": "DWH-to-CLOUD reference sheet",
         "heading": "CLOUD REFERENCE SHEET",

@@ -10,9 +10,10 @@ warehouse, and writes the result as JSON you can process and a spreadsheet a
 person can review next to the originals.
 
 An AI reads each messy file into flat records; plain Python joins those records
-into lineage. Each AI call sees exactly **one** file, so a value can be checked
-character-for-character against the file it came from, and a cross-file link
-cannot be invented. How that works is in [docs/DESIGN.md](docs/DESIGN.md).
+into lineage. Each AI call sees exactly **one** file — one *section* of one
+file for a long document — so a value can be checked character-for-character
+against the source it came from, and a cross-file link cannot be invented. How
+that works is in [docs/DESIGN.md](docs/DESIGN.md).
 
 ---
 
@@ -20,8 +21,8 @@ cannot be invented. How that works is in [docs/DESIGN.md](docs/DESIGN.md).
 
 | | |
 |---|---|
-| **Reads** | Excel (`.xlsx`), SQL (`CREATE VIEW`, `CREATE TABLE … AS SELECT`), and — with an optional package — PDF, Word, PowerPoint, HTML, including scanned pages via OCR |
-| **Builds** | field-level lineage across a multi-stage pipeline, or inside a single SQL file |
+| **Reads** | Excel (`.xlsx`), SQL (`CREATE VIEW`, `CREATE TABLE … AS SELECT`), and — with an optional package — PDF, Word, PowerPoint, HTML, Markdown, including scanned pages via OCR |
+| **Builds** | field-level lineage across a multi-stage pipeline, inside a single SQL file, or out of prose documents |
 | **Explains a folder** | reports what is actually in an unfamiliar folder and *proposes* a layout for it |
 | **Models** | `Table`, `Column`, `Lineage` as real types, not loose dictionaries |
 | **Collects meanings** | exports a sheet for a person to fill in, reads field meanings out of PDFs, joins both |
@@ -29,9 +30,6 @@ cannot be invented. How that works is in [docs/DESIGN.md](docs/DESIGN.md).
 | **Checks itself** | six checks per run, including one that proves no value was invented |
 | **Runs on any model** | Gemini, OpenAI, Claude, Mistral, or Ollama on your own machine |
 | **Scores itself** | compares its output against a dictionary built by hand |
-
-Measured against hand-built dictionaries: **98.4%** field accuracy on an Excel
-archive, **99.3%** on SQL views.
 
 ---
 
@@ -90,6 +88,8 @@ file **content**.
 Neither is required. Install one and PDFs start working; install `docling` and
 it takes over automatically, adding `.docx`, `.pptx`, `.html` and scanned
 pages. **No code change and no flag** — the program checks what is installed.
+With one of them installed, `--docs` builds a dictionary and lineage from those
+documents, not just field meanings.
 
 ## 7. Optional — use a model other than Gemini
 
@@ -211,6 +211,7 @@ overwriting the previous comparison — read one before running the other.
 |---|---|
 | `--archive DIR` | build from an Excel archive |
 | `--sql DIR_OR_FILE` | build from SQL scripts |
+| `--docs DIR_OR_FILE` | build from prose documents (PDF, Word, PowerPoint, HTML) |
 | `--table NAME` | which table to build; repeatable; omit for all |
 | `--layout FILE` | describe a differently-shaped archive |
 | `--survey DIR` | report a folder's contents and propose a layout |
@@ -219,12 +220,14 @@ overwriting the previous comparison — read one before running the other.
 | `--descriptions FILE` | read a filled-in sheet back |
 | `--from-docs DIR_OR_FILE` | read field meanings out of prose documents |
 | `--rules-doc FILE` | write the extraction-rules table |
+| `--assembler MODE` | `legacy` (default), `unified` (one claim pool for every format), or `both` to run each and report the difference |
+| `--generate-template DOC` | induce an extraction contract from example documents |
 | `--out` / `--xlsx` / `--report` | override output paths |
 | `--cache FILE` | the extraction cache; delete it to force re-reading |
 
 Output paths default per mode — `out/output.*` for an archive, `out/views.*`
-for SQL, each with its own cache. **Neither command needs an output flag**, and
-neither mode can overwrite the other's files.
+for SQL, `out/docs.*` for documents, each with its own cache. **No command needs
+an output flag**, and no mode can overwrite another's files.
 
 ---
 
@@ -277,13 +280,16 @@ records[0].lineage[-1].sources[0].role
 
 - **Descriptions are copied, never generated.** Where no source states a
   meaning the field is `null`. Fill it by hand or from a document.
-- **A `CREATE TABLE … AS SELECT *` cannot be completeness-checked.** It declares
-  no column list, and deriving one would need a second file. Reported
-  explicitly rather than skipped.
+- **Some sources cannot be completeness-checked.** A `CREATE TABLE … AS
+  SELECT *` declares no column list, and deriving one would need a second file.
+  A prose document states no row count or column list at all. In both cases the
+  check does not run: fidelity still catches an invented value, but nothing
+  catches a dropped one. Reported explicitly rather than skipped.
 - **OCR on scanned pages drops Vietnamese diacritics.** Text comes out
   readable, but identifiers from a scan are low-confidence.
-- **A layout is still required** for an archive. The survey proposes one, but
-  nothing is inferred silently.
+- **A layout is still required** for an archive — it is what finds the files.
+  The survey proposes one, but nothing is inferred silently. Stage *order* is
+  now also derived from the data and checked against what the layout declares.
 - **Gaps are counted, never judged.** A blank is often the truthful answer, and
   only someone who knows the platform can say whether it is a defect.
 

@@ -47,8 +47,10 @@ def _is_header_row(cells, anchors) -> bool:
 # so instead we locate the column-header row and count what follows it.
 # Returns None when no header row is recognisable — the caller reports the
 # record count as a metric but does not fail the run on a number it guessed.
-def expected_row_count(df: pd.DataFrame, source_kind: str):
-    anchors = kinds.header_anchors(source_kind)
+def expected_row_count(df: pd.DataFrame, source_kind: str, anchors=None):
+    """`anchors` overrides the registry's defaults, for an archive whose sheets
+    use different captions. None means "use what kinds.py declares"."""
+    anchors = anchors or kinds.header_anchors(source_kind)
     if anchors is None:
         return None
     for position in range(len(df)):

@@ -142,6 +142,24 @@ _REGISTRY = (
         statement=None,
     ),
     SourceKind(
+        name="doc_lineage",
+        schema_file="doc_mapping.json",
+        reader=DOCUMENT,
+        # Same reader as doc_prose and deliberately a SEPARATE kind. The two ask
+        # a document different questions — what does this field MEAN, and where
+        # is it loaded FROM — and a document answers both, in different places,
+        # with different evidence. One prompt doing two jobs is how the SQL side
+        # got a CREATE TABLE labelled a view; and because the kind name is part
+        # of the cache key, keeping them apart also means each answer is cached
+        # and re-checkable on its own.
+        header_anchors=None,
+        # No CREATE statement to classify by and no stage to derive from one.
+        # A document's produced stage comes from where its subject lands in the
+        # claim graph — see order.py, which exists because prose had nothing to
+        # borrow a stage name from.
+        statement=None,
+    ),
+    SourceKind(
         name="table_sql",
         # SHARES the view schema, deliberately. A CREATE TABLE ... AS SELECT
         # states exactly the same facts a view does — target column, source

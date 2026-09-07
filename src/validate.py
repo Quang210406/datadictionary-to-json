@@ -263,6 +263,11 @@ NO_ANCHOR = {
     kinds.EXCEL:
         "no column-header row was recognised, so the data row count could not "
         "be established",
+    kinds.DOCUMENT:
+        "prose states no anchor at all: a spreadsheet states a row count and a "
+        "CREATE states a column list, but nothing in a design document says how "
+        "many fields it ought to define. This is not a gap to be closed — it is "
+        "the truthful answer, and the count is reported unjudged",
 }
 
 
